@@ -63,12 +63,6 @@ typedef struct _ins_ref_t {
   int opcode_br;
   int opcode_mem;
   int marker_value;
-  //int opcode_MEM;
-  //int opcode_mem_load;
-  //int opcode_fp_addsub;
-  //int opcode_fb_mul;
-  //int opcode_fb_div;
-  //int opcode_fb_sqrt;
   int opcode_other;
   ushort type;
   ushort size;
@@ -126,6 +120,18 @@ static uint getPCdiff(app_pc pc)
   return diff;
 }
 
+int array_to_num(int arr[],int n){
+  char str[6][3];
+  int i;
+  char number[13] = {'\n'};
+
+  for(i=0;i<n;i++) sprintf(str[i],"%d",arr[i]);
+  for(i=0;i<n;i++)strcat(number,str[i]);
+
+  i = atoi(number);
+  return i;
+} 
+
 app_pc br_pending_pc = 0;
 app_pc br_pending_target = 0;
 bool br_pending = false;
@@ -134,7 +140,9 @@ bool marker_begin = false;
 bool marker_end = false;
 bool marker_dep = false;
 bool marker_next_load = false;
-int final_marker_value = 0;
+int final_marker_value[2] = {0}; //MAX 999
+int f_marker = 0;
+int marker_index = 0;
 
 static void
 instrace(void *drcontext)
@@ -156,8 +164,14 @@ instrace(void *drcontext)
 	br_pending = false;
       }
       if(ins_ref->opcode == 1 || ins_ref->opcode == 2){ //read or write
-	if(ins_ref->opcode == 1) //read
-	  fprintf(data->logf, "L%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	if(ins_ref->opcode == 1){ //read
+	  if(marker_next_load){
+	    fprintf(data->logf, "L%ds%d "PIFX" %d\n", pcdiff,f_marker,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	    marker_next_load = false;
+	    f_marker = 0;
+	  }else
+	    fprintf(data->logf, "L%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	}
 	else if(ins_ref->opcode == 2) //write
 	  fprintf(data->logf, "S%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
       }
@@ -184,24 +198,25 @@ instrace(void *drcontext)
 	fprintf(data->logf, "Q%d\n", pcdiff);
       }
       else if (ins_ref->opcode == 9){//marker begin 
-	DR_ASSERT(marker_next_load == false);
+	printf("R11\n");
 	marker_begin = true;
-	char str[] = ""; 
-	strcat(marker_value, str); //reset marker value FIXME: Its global have to change it for per thread 
+	marker_index = 0;//set index to 0
+	for(int i = 0; i < 2;  i++) //set all values to 0
+	  final_marker_value[i] = 0;
       }
       else if (ins_ref->opcode == 10){//marker end
+	printf("R10\n");
 	DR_ASSERT(marker_begin);
 	marker_end = true;
-	final_marker_value = atoi(marker_value);
+	f_marker = array_to_num(final_marker_value, marker_index);
 	marker_next_load = true;
       }
       else if (ins_ref->opcode == 11){//marker dep
+	printf("%d\n",ins_ref->marker_value);
 	DR_ASSERT(marker_begin);
-	char str[] = "";
-	sprintf(str, "%d", ins_ref->marker_value);
-	//strcat(str, ins_ref->marker_value);
-	//str = ins_ref->marker_value;
-	strcat(marker_value, str);
+	final_marker_value[marker_index] = ins_ref->marker_value;
+	marker_index++;
+	DR_ASSERT(marker_index < (int)sizeof(final_marker_value));
       }
       
       data->num_refs++;
@@ -258,6 +273,18 @@ insert_save_pc(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t bas
             XINST_CREATE_store(drcontext,
                                OPND_CREATE_MEMPTR(base, offsetof(ins_ref_t, pc)),
                                opnd_create_reg(scratch)));
+}
+
+static void
+insert_save_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+	       reg_id_t scratch, int marker_value)
+{
+  instrlist_insert_mov_immed_ptrsz(drcontext, marker_value, opnd_create_reg(scratch),
+				   ilist, where, NULL, NULL);
+  MINSERT(ilist, where,
+	  XINST_CREATE_store(drcontext,
+			     OPND_CREATE_MEMPTR(base, offsetof(ins_ref_t, marker_value)),
+			     opnd_create_reg(scratch)));
 }
 
 static void
@@ -382,23 +409,11 @@ insert_save_other(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t 
 				    opnd_create_reg(scratch)));
 }
 
-static void
-insert_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
-		  reg_id_t scratch, int marker_value)
-{
-  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
-  MINSERT(ilist, where,
-	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
-				OPND_CREATE_INT16(marker_value)));
-  MINSERT(ilist, where,
-	  XINST_CREATE_store_2bytes(
-				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, marker_value)),
-				    opnd_create_reg(scratch)));
-}
+
 
 
 static void
-instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where)
+instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int marker_value)
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -417,8 +432,8 @@ instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where)
 		     10);
   insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
 		    1);
-  //insert_marker_value(drcontext, ilist, where, reg_ptr, reg_tmp,
-  //		      marker_value);
+  insert_save_marker_value(drcontext, ilist, where, reg_ptr, reg_tmp,
+  		      marker_value);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -446,7 +461,7 @@ instrument_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, int
 		     11);
   insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
 		    1);
-  insert_marker_value(drcontext, ilist, where, reg_ptr, reg_tmp,
+  insert_save_marker_value(drcontext, ilist, where, reg_ptr, reg_tmp,
                     marker_value);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
@@ -736,74 +751,41 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
 	reg_id_t reg_id = opnd_get_reg(src_opnd); //get register
 	//if(strcmp(get_register_name(reg_id), "wzr") && strcmp(get_register_name(reg_id), "xzr"))
 	// printf("C%s\n", get_register_name(reg_id));
-	
 	if(!strcmp(get_register_name(reg_id), "x11")){
-	  printf("%s\n", get_register_name(reg_id));
-	  //instrument_marker_begin(drcontext, bb, instr);
+	  instrument_marker_begin(drcontext, bb, instr);
 	  marker = true; //set marker
-	  char str[] = "";
-	  strcat(marker_value, str); //reset it
 	}
 	if(!strcmp(get_register_name(reg_id), "x10") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  //DR_ASSERT(marker);
+	  DR_ASSERT(marker);
 	  marker = false;
-	  //instrument_marker_end(drcontext, bb, instr);
+	  instrument_marker_end(drcontext, bb, instr, atoi(marker_value));
 	}
 	if(!strcmp(get_register_name(reg_id), "x0") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "1";
-	  //instrument_marker_value(drcontext, bb, instr, 1);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 0);
 	}
-	
 	if(!strcmp(get_register_name(reg_id), "x1") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "1";
-	  //instrument_marker_value(drcontext, bb, instr, 1);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 1);
 	}
 	if (!strcmp(get_register_name(reg_id), "x2") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "2";
-	  //instrument_marker_value(drcontext, bb, instr, 2);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 2);
 	}
 	if (!strcmp(get_register_name(reg_id), "x3") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "3";
-	  //instrument_marker_value(drcontext, bb, instr, 3);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 3);
 	}
 	if (!strcmp(get_register_name(reg_id), "x4") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "4";
-	  //instrument_marker_value(drcontext, bb, instr, 4);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 4);
 	}
 	if (!strcmp(get_register_name(reg_id), "x5") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "5";
-	  //instrument_marker_value(drcontext, bb, instr, 5);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 5);
 	}
 	if (!strcmp(get_register_name(reg_id), "x6") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "6";
-	  //instrument_marker_value(drcontext, bb, instr, 6);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 6);
 	}
 	if (!strcmp(get_register_name(reg_id), "x7") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "7";
-	  //instrument_marker_value(drcontext, bb, instr, 7);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 7);
 	}
 	if (!strcmp(get_register_name(reg_id), "x9") && marker){
-	  printf("%s\n", get_register_name(reg_id));
-	  char str[] = "8";
-	  //instrument_marker_value(drcontext, bb, instr, 9);
-	  strcat(marker_value, str);
+	  instrument_marker_value(drcontext, bb, instr, 9);
 	}
       }
     }
