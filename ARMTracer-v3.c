@@ -50,7 +50,6 @@
 #include<string.h> 
 #include <stdio.h>
 #include <stdlib.h>
-
 #include <stddef.h> /* for offsetof */
 #include "dr_api.h"
 #include "drmgr.h"
@@ -60,7 +59,7 @@
 
 typedef struct _ins_ref_t {
   app_pc pc;
-  int opcode; //1. Read 2. Write 3. Branch 4. FP_add/sub 5. FP_mul 6. FP_div 7. FP_sqrt 8. Other 9. Marker Begin 10. Marker End
+  int opcode; //1. Read 2. Write 3. Branch 4. FP_add/sub 5. FP_mul 6. FP_div 7. FP_sqrt 8. Other 9. Marker Begin 10. Marker End 11. Marker_value
   int opcode_br;
   int opcode_mem;
   int marker_value;
@@ -131,7 +130,11 @@ app_pc br_pending_pc = 0;
 app_pc br_pending_target = 0;
 bool br_pending = false;
 uint br_pending_pcdiff = 0;
-
+bool marker_begin = false;
+bool marker_end = false;
+bool marker_dep = false;
+bool marker_next_load = false;
+int final_marker_value = 0;
 
 static void
 instrace(void *drcontext)
@@ -142,7 +145,7 @@ instrace(void *drcontext)
     data = drmgr_get_tls_field(drcontext, tls_idx);
     buf_ptr = BUF_PTR(data->seg_base);
     for (ins_ref = (ins_ref_t *)data->buf_base; ins_ref < buf_ptr; ins_ref++) {
-      DR_ASSERT(ins_ref->opcode > 0 && ins_ref->opcode < 9);
+      DR_ASSERT(ins_ref->opcode > 0 && ins_ref->opcode < 12);
       uint pcdiff = getPCdiff(ins_ref->pc);
       if(br_pending){
 	fprintf(data->logf, "B%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
@@ -179,7 +182,28 @@ instrace(void *drcontext)
       }
       else if (ins_ref->opcode == 7){ //floating sqrt
 	fprintf(data->logf, "Q%d\n", pcdiff);
-      }      
+      }
+      else if (ins_ref->opcode == 9){//marker begin 
+	DR_ASSERT(marker_next_load == false);
+	marker_begin = true;
+	char str[] = ""; 
+	strcat(marker_value, str); //reset marker value FIXME: Its global have to change it for per thread 
+      }
+      else if (ins_ref->opcode == 10){//marker end
+	DR_ASSERT(marker_begin);
+	marker_end = true;
+	final_marker_value = atoi(marker_value);
+	marker_next_load = true;
+      }
+      else if (ins_ref->opcode == 11){//marker dep
+	DR_ASSERT(marker_begin);
+	char str[] = "";
+	sprintf(str, "%d", ins_ref->marker_value);
+	//strcat(str, ins_ref->marker_value);
+	//str = ins_ref->marker_value;
+	strcat(marker_value, str);
+      }
+      
       data->num_refs++;
     }
     BUF_PTR(data->seg_base) = data->buf_base;
@@ -374,7 +398,7 @@ insert_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_
 
 
 static void
-instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int marker_value)
+instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where)
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -393,8 +417,37 @@ instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int m
 		     10);
   insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
 		    1);
+  //insert_marker_value(drcontext, ilist, where, reg_ptr, reg_tmp,
+  //		      marker_value);
+  insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
+
+  if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
+      drreg_unreserve_register(drcontext, ilist, where, reg_tmp) != DRREG_SUCCESS)
+    DR_ASSERT(false);
+}
+
+static void
+instrument_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, int marker_value)
+{
+  reg_id_t reg_ptr, reg_tmp;
+  if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
+                              DRREG_SUCCESS ||
+      drreg_reserve_register(drcontext, ilist, where, NULL, &reg_tmp) !=
+      DRREG_SUCCESS) {
+    DR_ASSERT(false); /* cannot recover */
+    return;
+  }
+
+  insert_load_buf_ptr(drcontext, ilist, where, reg_ptr);
+  insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
+  //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
+  //                  instr_get_opcode(where));
+  insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
+		     11);
+  insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
+		    1);
   insert_marker_value(drcontext, ilist, where, reg_ptr, reg_tmp,
-		      marker_value);
+                    marker_value);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -675,53 +728,83 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
     {
       instrument_fp_sqrt(drcontext, bb, instr);
     }
-  else if (!strcmp(decode_opcode_name(instr_get_opcode(instr)), "cpy"))
+  else if (!strcmp(decode_opcode_name(instr_get_opcode(instr)), "orr"))
     {
-      opnd_t src_opnd = instr_get_src(instr, 0); //first operand
-      DR_ASSERT(opnd_is_reg(src_opnd));
-      reg_id_t reg_id = opnd_get_reg(src_opnd); //get register
-      if(!strcmp(get_register_name(reg_id), "REG_R11")){
-	instrument_marker_begin(drcontext, bb, instr);
-	marker = true; //set marker
-	char str[] = "";
-	strcat(marker_value, str); //reset it
-      }
-      if(!strcmp(get_register_name(reg_id), "REG_R10")){
-	DR_ASSERT(marker);
-	marker = false;
-	instrument_marker_end(drcontext, bb, instr, atoi(marker_value));
-      }
-      if(!strcmp(get_register_name(reg_id), "REG_R1")){
-	char str[] = "1";
-	strcat(marker_value, str);
-      }
-      if (!strcmp(get_register_name(reg_id), "REG_R2")){
-	char str[] = "2";
-	strcat(marker_value, str);
-      }
-      if (!strcmp(get_register_name(reg_id), "REG_R3")){
-	char str[] = "3";
-	strcat(marker_value, str);
-      }
-      if (!strcmp(get_register_name(reg_id), "REG_R4")){
-	char str[] = "4";
-	strcat(marker_value, str);
-      }
-      if (!strcmp(get_register_name(reg_id), "REG_R5")){
-	char str[] = "5";
-	strcat(marker_value, str);
-      }
-      if (!strcmp(get_register_name(reg_id), "REG_R6")){
-	char str[] = "6";
-	strcat(marker_value, str);
-      }
-      if (!strcmp(get_register_name(reg_id), "REG_R7")){
-	char str[] = "7";
-	strcat(marker_value, str);
-      }
-      if (!strcmp(get_register_name(reg_id), "REG_R9")){
-	char str[] = "8";
-	strcat(marker_value, str);
+      if(instr_num_srcs(instr) == 4){
+	opnd_t src_opnd = instr_get_src(instr, 0); //first operand
+	DR_ASSERT(opnd_is_reg(src_opnd));
+	reg_id_t reg_id = opnd_get_reg(src_opnd); //get register
+	//if(strcmp(get_register_name(reg_id), "wzr") && strcmp(get_register_name(reg_id), "xzr"))
+	// printf("C%s\n", get_register_name(reg_id));
+	
+	if(!strcmp(get_register_name(reg_id), "x11")){
+	  printf("%s\n", get_register_name(reg_id));
+	  //instrument_marker_begin(drcontext, bb, instr);
+	  marker = true; //set marker
+	  char str[] = "";
+	  strcat(marker_value, str); //reset it
+	}
+	if(!strcmp(get_register_name(reg_id), "x10") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  //DR_ASSERT(marker);
+	  marker = false;
+	  //instrument_marker_end(drcontext, bb, instr);
+	}
+	if(!strcmp(get_register_name(reg_id), "x0") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "1";
+	  //instrument_marker_value(drcontext, bb, instr, 1);
+	  strcat(marker_value, str);
+	}
+	
+	if(!strcmp(get_register_name(reg_id), "x1") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "1";
+	  //instrument_marker_value(drcontext, bb, instr, 1);
+	  strcat(marker_value, str);
+	}
+	if (!strcmp(get_register_name(reg_id), "x2") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "2";
+	  //instrument_marker_value(drcontext, bb, instr, 2);
+	  strcat(marker_value, str);
+	}
+	if (!strcmp(get_register_name(reg_id), "x3") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "3";
+	  //instrument_marker_value(drcontext, bb, instr, 3);
+	  strcat(marker_value, str);
+	}
+	if (!strcmp(get_register_name(reg_id), "x4") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "4";
+	  //instrument_marker_value(drcontext, bb, instr, 4);
+	  strcat(marker_value, str);
+	}
+	if (!strcmp(get_register_name(reg_id), "x5") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "5";
+	  //instrument_marker_value(drcontext, bb, instr, 5);
+	  strcat(marker_value, str);
+	}
+	if (!strcmp(get_register_name(reg_id), "x6") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "6";
+	  //instrument_marker_value(drcontext, bb, instr, 6);
+	  strcat(marker_value, str);
+	}
+	if (!strcmp(get_register_name(reg_id), "x7") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "7";
+	  //instrument_marker_value(drcontext, bb, instr, 7);
+	  strcat(marker_value, str);
+	}
+	if (!strcmp(get_register_name(reg_id), "x9") && marker){
+	  printf("%s\n", get_register_name(reg_id));
+	  char str[] = "8";
+	  //instrument_marker_value(drcontext, bb, instr, 9);
+	  strcat(marker_value, str);
+	}
       }
     }
   else
