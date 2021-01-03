@@ -56,6 +56,8 @@
 #include "drreg.h"
 #include "utils.h"
 #include "drutil.h"
+#include "drx.h"
+
 
 typedef struct _ins_ref_t {
   app_pc pc;
@@ -81,16 +83,17 @@ enum {
   REF_TYPE_WRITE = 1,
 };
 
+#define DISPLAY_STRING(msg) dr_printf("%s\n", msg);
 #define MAX_NUM_INS_REFS 8192
 #define MEM_BUF_SIZE (sizeof(ins_ref_t) * MAX_NUM_INS_REFS)
 #define MINSERT instrlist_meta_preinsert
 
 typedef struct {
-    byte *seg_base;
-    ins_ref_t *buf_base;
-    file_t log;
-    FILE *logf;
-    uint64 num_refs;
+  byte *seg_base;
+  ins_ref_t *buf_base;
+  file_t log;
+  FILE *logf;
+  uint64 num_refs;
 } per_thread_t;
 
 char marker_value[] = "";
@@ -98,6 +101,13 @@ bool marker = false;
 static client_id_t client_id;
 static void *mutex;    
 static uint64 num_refs;
+static int stat_load;
+static int stat_marked;
+static int stat_marked0;
+static int stat_marked1;
+static int stat_marked2;
+static int stat_markedp2;
+FILE *logs;
 
 enum {
     INSTRACE_TLS_OFFS_BUF_PTR,
@@ -124,10 +134,8 @@ int array_to_num(int arr[],int n){
   char str[6][3];
   int i;
   char number[13] = {'\n'};
-
   for(i=0;i<n;i++) sprintf(str[i],"%d",arr[i]);
   for(i=0;i<n;i++)strcat(number,str[i]);
-
   i = atoi(number);
   return i;
 } 
@@ -145,7 +153,7 @@ int f_marker = 0;
 int marker_index = 0;
 
 static void
-instrace(void *drcontext)
+ARMTracer(void *drcontext)
 {
     per_thread_t *data;
     ins_ref_t *ins_ref, *buf_ptr;
@@ -165,10 +173,12 @@ instrace(void *drcontext)
       }
       if(ins_ref->opcode == 1 || ins_ref->opcode == 2){ //read or write
 	if(ins_ref->opcode == 1){ //read
+	  stat_load++;
 	  if(marker_next_load){
 	    fprintf(data->logf, "L%ds%d "PIFX" %d\n", pcdiff,f_marker,(ptr_uint_t)ins_ref->addr,ins_ref->size);
 	    marker_next_load = false;
 	    f_marker = 0;
+	    stat_marked++;
 	  }else
 	    fprintf(data->logf, "L%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
 	}
@@ -209,6 +219,15 @@ instrace(void *drcontext)
 	DR_ASSERT(marker_begin);
 	marker_end = true;
 	f_marker = array_to_num(final_marker_value, marker_index);
+	if(f_marker == 0)
+	  stat_marked0++;
+	else if(f_marker == 1)
+	  stat_marked1++;
+	else if(f_marker == 2)
+	  stat_marked2++;
+	else if(f_marker > 2)
+	  stat_markedp2++;
+	//printf("%d %d %d %d\n",stat_marked0, stat_marked1,stat_marked2,stat_markedp2);
 	marker_next_load = true;
       }
       else if (ins_ref->opcode == 11){//marker dep
@@ -228,7 +247,7 @@ static void
 clean_call(void)
 {
     void *drcontext = dr_get_current_drcontext();
-    instrace(drcontext);
+    ARMTracer(drcontext);
 }
 
 static void
@@ -813,37 +832,47 @@ static void
 event_thread_init(void *drcontext)
 {
     per_thread_t *data = dr_thread_alloc(drcontext, sizeof(per_thread_t));
+    per_thread_t *log = dr_thread_alloc(drcontext, sizeof(per_thread_t));
+    
     DR_ASSERT(data != NULL);
+    DR_ASSERT(data != NULL);
+    
     drmgr_set_tls_field(drcontext, tls_idx, data);
-
+    
     data->seg_base = dr_get_dr_segment_base(tls_seg);
     data->buf_base =
-        dr_raw_mem_alloc(MEM_BUF_SIZE, DR_MEMPROT_READ | DR_MEMPROT_WRITE, NULL);
+      dr_raw_mem_alloc(MEM_BUF_SIZE, DR_MEMPROT_READ | DR_MEMPROT_WRITE, NULL);
     DR_ASSERT(data->seg_base != NULL && data->buf_base != NULL);
     BUF_PTR(data->seg_base) = data->buf_base;
-
+    
     data->num_refs = 0;
-
+    
     /* We're going to dump our data to a per-thread file.
      * On Windows we need an absolute path so we place it in
      * the same directory as our library. We could also pass
      * in a path as a client argument.
      */
     data->log =
-        log_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer",
+      log_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer",
 #ifndef WINDOWS
-                      DR_FILE_CLOSE_ON_FORK |
+		    DR_FILE_CLOSE_ON_FORK |
 #endif
-                          DR_FILE_ALLOW_LARGE);
+		    DR_FILE_ALLOW_LARGE);
+        
     data->logf = log_stream_from_file(data->log);
     fprintf(data->logf, "INITIAL PC HERE\n");
+
+    logs = log_stream_from_file(log_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer-log",
+					      DR_FILE_ALLOW_LARGE));
+    fprintf(logs, "SMDA stats file\n");
+    
 }
 
 static void
 event_thread_exit(void *drcontext)
 {
     per_thread_t *data;
-    instrace(drcontext); /* dump any remaining buffer entries */
+    ARMTracer(drcontext); /* dump any remaining buffer entries */
     data = drmgr_get_tls_field(drcontext, tls_idx);
     dr_mutex_lock(mutex);
     num_refs += data->num_refs;
@@ -856,7 +885,7 @@ event_thread_exit(void *drcontext)
 static void
 event_exit(void)
 {
-    dr_log(NULL, DR_LOG_ALL, 1, "Client 'instrace' num refs seen: " SZFMT "\n", num_refs);
+    dr_log(NULL, DR_LOG_ALL, 1, "Client 'ARMTracer' num refs seen: " SZFMT "\n", num_refs);
     if (!dr_raw_tls_cfree(tls_offs, INSTRACE_TLS_COUNT))
         DR_ASSERT(false);
 
@@ -866,7 +895,27 @@ event_exit(void)
         !drmgr_unregister_bb_insertion_event(event_app_instruction) ||
         drreg_exit() != DRREG_SUCCESS)
         DR_ASSERT(false);
-
+    float lmarked = (((float)stat_marked/stat_load)*100);
+    float lmarked0 = (((float)stat_marked0/stat_load)*100);
+    float lmarked1 = (((float)stat_marked1/stat_load)*100);
+    float lmarked2 = (((float)stat_marked2/stat_load)*100);
+    float lmarkedp2 = (((float)stat_markedp2/stat_load)*100);
+    
+    fprintf(logs,
+	    "Loads Executed: %d\n" 
+	    "Loads Marked: %d(%.4f)\n"
+	    "Marked at 0: %d(%.4f)\n"
+	    "Marked at 1: %d(%.4f)\n"
+	    "Marked at 2: %d(%.4f)\n"
+	    "Marked at 2+: %d(%.4f)\n",
+	    stat_load,
+	    stat_marked,lmarked,
+	    stat_marked0,lmarked0,
+	    stat_marked1,lmarked1,
+	    stat_marked2,lmarked2,
+	    stat_markedp2,lmarkedp2
+	    );
+    log_stream_close(logs);
     dr_mutex_destroy(mutex);
     drmgr_exit();
 }
@@ -900,5 +949,5 @@ dr_client_main(client_id_t id, int argc, const char *argv[])
     if (!dr_raw_tls_calloc(&tls_seg, &tls_offs, INSTRACE_TLS_COUNT, 0))
         DR_ASSERT(false);
 
-    dr_log(NULL, DR_LOG_ALL, 1, "Client 'instrace' initializing\n");
+    dr_log(NULL, DR_LOG_ALL, 1, "Client 'ARMTracer' initializing\n");
 }
