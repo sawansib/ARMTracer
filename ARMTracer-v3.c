@@ -165,26 +165,26 @@ ARMTracer(void *drcontext)
       DR_ASSERT(ins_ref->opcode > 0 && ins_ref->opcode < 12);
       uint pcdiff = getPCdiff(ins_ref->pc);
       if(br_pending){
-	fprintf(data->logf, "B%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
+	gzprintf(data->deptrace, "B%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
 	if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
-	  fprintf(data->logf,"\n");
+	  gzprintf(data->deptrace,"\n");
 	else
-	  fprintf(data->logf,"*\n");
+	  gzprintf(data->deptrace,"*\n");
 	br_pending = false;
       }
       if(ins_ref->opcode == 1 || ins_ref->opcode == 2){ //read or write
 	if(ins_ref->opcode == 1){ //read
 	  stat_load++;
 	  if(marker_next_load){
-	    fprintf(data->logf, "L%ds%d "PIFX" %d\n", pcdiff,f_marker,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	    gzprintf(data->deptrace, "L%ds%d "PIFX" %d\n", pcdiff,f_marker,(ptr_uint_t)ins_ref->addr,ins_ref->size);
 	    marker_next_load = false;
 	    f_marker = 0;
 	    stat_marked++;
 	  }else
-	    fprintf(data->logf, "L%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	    gzprintf(data->deptrace, "L%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
 	}
 	else if(ins_ref->opcode == 2) //write
-	  fprintf(data->logf, "S%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	  gzprintf(data->deptrace, "S%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
       }
       else if (ins_ref->opcode == 3){ //Branch
 	DR_ASSERT(!br_pending);
@@ -194,19 +194,19 @@ ARMTracer(void *drcontext)
 	br_pending_pcdiff = pcdiff;
       }
       else if (ins_ref->opcode == 8){ //other isntruction
-	fprintf(data->logf, "OI%d\n", pcdiff);
+	gzprintf(data->deptrace, "OI%d\n", pcdiff);
       }
       else if (ins_ref->opcode == 4){ //floating add/sub
-	fprintf(data->logf, "A%d\n", pcdiff);
+	gzprintf(data->deptrace, "A%d\n", pcdiff);
       }
       else if (ins_ref->opcode == 5){ //floating Mul
-	fprintf(data->logf, "M%d\n", pcdiff);
+	gzprintf(data->deptrace, "M%d\n", pcdiff);
       }
       else if (ins_ref->opcode == 6){ //floating Div
-	fprintf(data->logf, "D%d\n", pcdiff);
+	gzprintf(data->deptrace, "D%d\n", pcdiff);
       }
       else if (ins_ref->opcode == 7){ //floating sqrt
-	fprintf(data->logf, "Q%d\n", pcdiff);
+	gzprintf(data->deptrace, "Q%d\n", pcdiff);
       }
       else if (ins_ref->opcode == 9){//marker begin 
 	//printf("R11\n");
@@ -861,7 +861,7 @@ event_thread_init(void *drcontext)
     data->deptrace = trace_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer",
 				     DR_FILE_ALLOW_LARGE);
     gzprintf(data->deptrace, "INITIAL PC HERE\n");
-    fprintf(data->logf, "INITIAL PC HERE\n");
+    //fprintf(data->logf, "INITIAL PC HERE\n");
 
     logs = log_stream_from_file(log_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer-log",
 					      DR_FILE_ALLOW_LARGE)); //log file .log
@@ -878,7 +878,7 @@ event_thread_exit(void *drcontext)
     dr_mutex_lock(mutex);
     num_refs += data->num_refs;
     dr_mutex_unlock(mutex);
-    log_stream_close(data->logf); /* closes fd too */
+    //log_stream_close(data->logf); /* closes fd too */
     dr_raw_mem_free(data->buf_base, MEM_BUF_SIZE);
     dr_thread_free(drcontext, data, sizeof(per_thread_t));
     gzclose(data->deptrace);
