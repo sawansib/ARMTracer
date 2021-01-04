@@ -91,7 +91,7 @@ log_file_open(client_id_t id, void *drcontext, const char *path, const char *nam
     
     if (log != INVALID_FILE) {
         char msg[MAXIMUM_PATH];
-        len = dr_snprintf(msg, BUFFER_SIZE_ELEMENTS(msg), "Data file %s created", buf);
+        len = dr_snprintf(msg, BUFFER_SIZE_ELEMENTS(msg), "Log file %s created", buf);
         DR_ASSERT(len > 0);
         NULL_TERMINATE_BUFFER(msg);
         dr_log(drcontext, DR_LOG_ALL, 1, "%s", msg);
