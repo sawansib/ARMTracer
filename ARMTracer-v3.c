@@ -208,14 +208,14 @@ ARMTracer(void *drcontext)
 	fprintf(data->logf, "Q%d\n", pcdiff);
       }
       else if (ins_ref->opcode == 9){//marker begin 
-	printf("R11\n");
+	//printf("R11\n");
 	marker_begin = true;
 	marker_index = 0;//set index to 0
 	for(int i = 0; i < 2;  i++) //set all values to 0
 	  final_marker_value[i] = 0;
       }
       else if (ins_ref->opcode == 10){//marker end
-	printf("R10\n");
+	//printf("R10\n");
 	DR_ASSERT(marker_begin);
 	marker_end = true;
 	f_marker = array_to_num(final_marker_value, marker_index);
@@ -231,8 +231,8 @@ ARMTracer(void *drcontext)
 	marker_next_load = true;
       }
       else if (ins_ref->opcode == 11){//marker dep
-	printf("%d\n",ins_ref->marker_value);
-	DR_ASSERT(marker_begin);
+	//printf("%d\n",ins_ref->marker_value);
+	//DR_ASSERT(marker_begin);
 	final_marker_value[marker_index] = ins_ref->marker_value;
 	marker_index++;
 	DR_ASSERT(marker_index < (int)sizeof(final_marker_value));
@@ -896,18 +896,18 @@ event_exit(void)
         drreg_exit() != DRREG_SUCCESS)
         DR_ASSERT(false);
     float lmarked = (((float)stat_marked/stat_load)*100);
-    float lmarked0 = (((float)stat_marked0/stat_load)*100);
-    float lmarked1 = (((float)stat_marked1/stat_load)*100);
-    float lmarked2 = (((float)stat_marked2/stat_load)*100);
-    float lmarkedp2 = (((float)stat_markedp2/stat_load)*100);
+    float lmarked0 = (((float)stat_marked0/stat_marked)*100);
+    float lmarked1 = (((float)stat_marked1/stat_marked)*100);
+    float lmarked2 = (((float)stat_marked2/stat_marked)*100);
+    float lmarkedp2 = (((float)stat_markedp2/stat_marked)*100);
     
     fprintf(logs,
 	    "Loads Executed: %d\n" 
-	    "Loads Marked: %d(%.4f)\n"
-	    "Marked at 0: %d(%.4f)\n"
-	    "Marked at 1: %d(%.4f)\n"
-	    "Marked at 2: %d(%.4f)\n"
-	    "Marked at 2+: %d(%.4f)\n",
+	    "Loads Marked: %d (%.4f%)\n"
+	    "Marked at 0: %d (%.4f%)\n"
+	    "Marked at 1: %d (%.4f%)\n"
+	    "Marked at 2: %d (%.4f%)\n"
+	    "Marked at 2+: %d (%.4f%)\n",
 	    stat_load,
 	    stat_marked,lmarked,
 	    stat_marked0,lmarked0,
