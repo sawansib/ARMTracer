@@ -34,7 +34,7 @@
 
 #include "dr_api.h" /* for file_t, client_id_t */
 #include <stdio.h>
-
+#include <zlib.h>
 #define BUFFER_SIZE_BYTES(buf) sizeof(buf)
 #define BUFFER_SIZE_ELEMENTS(buf) (BUFFER_SIZE_BYTES(buf) / sizeof((buf)[0]))
 #define BUFFER_LAST_ELEMENT(buf) (buf)[BUFFER_SIZE_ELEMENTS(buf) - 1]
@@ -63,6 +63,10 @@
  * - name:      name of the log file
  * - flags:     file open mode, e.g., DR_FILE_WRITE_REQUIRE_NEW
  */
+gzFile
+trace_file_open(client_id_t id, void *drcontext, const char *path, const char *name,
+		uint flags);
+
 file_t
 log_file_open(client_id_t id, void *drcontext, const char *path, const char *name,
               uint flags);

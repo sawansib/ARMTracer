@@ -1,4 +1,4 @@
-# **********************************************************
+#**********************************************************
 # Copyright (c) 2010-2019 Google, Inc.    All rights reserved.
 # Copyright (c) 2009-2010 VMware, Inc.    All rights reserved.
 # **********************************************************
@@ -30,7 +30,8 @@
 # DAMAGE.
 
 cmake_minimum_required(VERSION 2.6)
-
+set (CMAKE_C_FLAGS "-lz")
+set (CMAKE_CXX_FLAGS "-lz")
 if ("${CMAKE_BUILD_TYPE}" MATCHES "Debug")
   set(DEBUG ON)
 endif ("${CMAKE_BUILD_TYPE}" MATCHES "Debug")
@@ -77,6 +78,15 @@ if ("${CMAKE_GENERATOR}" MATCHES "Visual Studio")
       "${CMAKE_LIBRARY_OUTPUT_DIRECTORY}")
   endforeach ()
 endif ()
+
+# zlib is used for some clients/ and tests.
+if (CMAKE_CROSSCOMPILING)
+  # find_package looks at the host system.
+  # XXX i#2285: we should re-visit the CMAKE_FIND_ROOT_PATH settings!
+  set(ZLIB_FOUND OFF)
+else ()
+  find_package(ZLIB)
+  endif ()
 
 if (BUILD_TESTS)
   # For automated sanity tests we can't have msgboxes or output
@@ -194,7 +204,6 @@ endfunction (add_sample_standalone)
 configure_DynamoRIO_global(OFF ON)
 
 # Use ;-separated lists for source files and extensions.
-
 add_sample_client(ARMTracer-v3 "ARMTracer-v3.c;utils.c" "drmgr;drreg;drutil;drx")
 add_sample_client(ARMTracer-v2 "ARMTracer-v2.c;utils.c" "drmgr;drreg;drutil;drx")
 

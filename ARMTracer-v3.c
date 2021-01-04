@@ -47,7 +47,7 @@
  * Sawan Singh (singh.sawan@um.es) CAPS Group, University of Murcia, ES.
  * ******************************************************************************/
 
-#include<string.h> 
+#include <string.h> 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h> /* for offsetof */
@@ -57,7 +57,7 @@
 #include "utils.h"
 #include "drutil.h"
 #include "drx.h"
-
+#include <zlib.h>
 
 typedef struct _ins_ref_t {
   app_pc pc;
@@ -93,6 +93,7 @@ typedef struct {
   ins_ref_t *buf_base;
   file_t log;
   FILE *logf;
+  gzFile deptrace;
   uint64 num_refs;
 } per_thread_t;
 
@@ -852,18 +853,18 @@ event_thread_init(void *drcontext)
      * the same directory as our library. We could also pass
      * in a path as a client argument.
      */
-    data->log =
-      log_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer",
-#ifndef WINDOWS
-		    DR_FILE_CLOSE_ON_FORK |
-#endif
-		    DR_FILE_ALLOW_LARGE);
+    //data->log =
+    // log_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer",
+    //	    DR_FILE_ALLOW_LARGE); //trace file .trc
         
-    data->logf = log_stream_from_file(data->log);
+    //data->logf = log_stream_from_file(data->log);
+    data->deptrace = trace_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer",
+				     DR_FILE_ALLOW_LARGE);
+    gzprintf(data->deptrace, "INITIAL PC HERE\n");
     fprintf(data->logf, "INITIAL PC HERE\n");
 
     logs = log_stream_from_file(log_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer-log",
-					      DR_FILE_ALLOW_LARGE));
+					      DR_FILE_ALLOW_LARGE)); //log file .log
     fprintf(logs, "SMDA stats file\n");
     
 }
@@ -880,6 +881,8 @@ event_thread_exit(void *drcontext)
     log_stream_close(data->logf); /* closes fd too */
     dr_raw_mem_free(data->buf_base, MEM_BUF_SIZE);
     dr_thread_free(drcontext, data, sizeof(per_thread_t));
+    gzclose(data->deptrace);
+    
 }
 
 static void

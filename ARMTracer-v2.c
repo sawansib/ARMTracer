@@ -491,7 +491,7 @@ event_thread_init(void *drcontext)
 #ifndef WINDOWS
                       DR_FILE_CLOSE_ON_FORK |
 #endif
-                          DR_FILE_ALLOW_LARGE);
+		      DR_FILE_ALLOW_LARGE);
     data->logf = log_stream_from_file(data->log);
     fprintf(data->logf, "INITIAL PC HERE\n");
 }

@@ -35,9 +35,24 @@
 #include "utils.h"
 #include "drx.h"
 #include <stdio.h>
+#include <zlib.h>
+
 #ifdef WINDOWS
 #    include <io.h>
 #endif
+
+
+gzFile
+trace_file_open(client_id_t id, void *drcontext, const char *path, const char *name,
+		uint flags)
+{
+  gzFile fp;
+  char fn[0x100];
+  snprintf(fn, sizeof(fn), "%s-%s.tar.gz", name,dr_get_application_name());
+  fp = gzopen(fn, "wb");
+  return fp;
+}
+
 
 file_t
 log_file_open(client_id_t id, void *drcontext, const char *path, const char *name,
@@ -69,9 +84,11 @@ log_file_open(client_id_t id, void *drcontext, const char *path, const char *nam
     else if (sizeof(log_dir) > (dirsep + 1 - log_dir) / sizeof(log_dir[0]))
         *(dirsep + 1) = 0;
     NULL_TERMINATE_BUFFER(log_dir);
+    
     /* we do not need call drx_init before using drx_open_unique_appid_file */
-    log = drx_open_unique_appid_file(log_dir, dr_get_process_id(), name, "trc", flags,
-                                     buf, BUFFER_SIZE_ELEMENTS(buf));
+    log = drx_open_unique_appid_file(log_dir, dr_get_process_id(), name, "log", flags,
+				       buf, BUFFER_SIZE_ELEMENTS(buf));
+    
     if (log != INVALID_FILE) {
         char msg[MAXIMUM_PATH];
         len = dr_snprintf(msg, BUFFER_SIZE_ELEMENTS(msg), "Data file %s created", buf);
@@ -88,6 +105,8 @@ log_file_open(client_id_t id, void *drcontext, const char *path, const char *nam
 #    endif /* WINDOWS */
 #endif     /* SHOW_RESULTS */
     }
+
+    
     return log;
 }
 
