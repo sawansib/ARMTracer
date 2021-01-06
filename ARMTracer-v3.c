@@ -178,15 +178,18 @@ ARMTracer(void *drcontext)
 	if(ins_ref->opcode == 1){ //read
 	  stat_load++;
 	  if(marker_next_load){
-	    gzprintf(data->deptrace, "L%ds%d "PIFX" %d\n", pcdiff,f_marker,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	    gzprintf(data->deptrace, "L%ds%dr%dw%d "PIFX" %d\n", pcdiff,f_marker,ins_ref->read_registers,
+		     ins_ref->write_registers, (ptr_uint_t)ins_ref->addr,ins_ref->size);
 	    marker_next_load = false;
 	    f_marker = 0;
 	    stat_marked++;
 	  }else
-	    gzprintf(data->deptrace, "L%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	    gzprintf(data->deptrace, "L%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
+		     ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
 	}
 	else if(ins_ref->opcode == 2) //write
-	  gzprintf(data->deptrace, "S%d "PIFX" %d\n", pcdiff,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	  gzprintf(data->deptrace, "S%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
+		   ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
       }
       else if (ins_ref->opcode == 3){ //Branch
 	DR_ASSERT(!br_pending);
@@ -196,19 +199,24 @@ ARMTracer(void *drcontext)
 	br_pending_pcdiff = pcdiff;
       }
       else if (ins_ref->opcode == 8){ //other isntruction
-	gzprintf(data->deptrace, "OI%d\n", pcdiff);
+	gzprintf(data->deptrace, "OI%dr%dw%d\n", pcdiff, ins_ref->read_registers,
+		 ins_ref->write_registers);
       }
       else if (ins_ref->opcode == 4){ //floating add/sub
-	gzprintf(data->deptrace, "A%d\n", pcdiff);
+	gzprintf(data->deptrace, "A%dr%dw%d\n", pcdiff, ins_ref->read_registers,
+		 ins_ref->write_registers);
       }
       else if (ins_ref->opcode == 5){ //floating Mul
-	gzprintf(data->deptrace, "M%d\n", pcdiff);
+	gzprintf(data->deptrace, "M%dr%dw%d\n", pcdiff, ins_ref->read_registers,
+		                  ins_ref->write_registers);
       }
       else if (ins_ref->opcode == 6){ //floating Div
-	gzprintf(data->deptrace, "D%d\n", pcdiff);
+	gzprintf(data->deptrace, "D%dr%dw%d\n", pcdiff, ins_ref->read_registers,
+		                  ins_ref->write_registers);
       }
       else if (ins_ref->opcode == 7){ //floating sqrt
-	gzprintf(data->deptrace, "Q%d\n", pcdiff);
+	gzprintf(data->deptrace, "Q%dr%dw%d\n", pcdiff, ins_ref->read_registers,
+		                  ins_ref->write_registers);
       }
       else if (ins_ref->opcode == 9){//marker begin 
 	//printf("R11\n");
