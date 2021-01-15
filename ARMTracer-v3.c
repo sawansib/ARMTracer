@@ -46,7 +46,7 @@
  * 2 A0 3d1 B2d2t-120* L5d1 fff0 4
  * Sawan Singh (singh.sawan@um.es) CAPS Group, University of Murcia, ES.
  * ******************************************************************************/
-
+#include <inttypes.h>
 #include <string.h> 
 #include <stdio.h>
 #include <stdlib.h>
@@ -87,8 +87,8 @@ enum {
   REF_TYPE_WRITE = 1,
 };
 
-#define LOOP_NOALIAS_DIST -999
 #define MAX_STORE_ADDR 100
+#define LOOP_NOALIAS_DIST -999
 #define DISPLAY_STRING(msg) dr_printf("%s\n", msg);
 #define MAX_NUM_INS_REFS 8192
 #define MEM_BUF_SIZE (sizeof(ins_ref_t) * MAX_NUM_INS_REFS)
@@ -114,6 +114,7 @@ static int stat_marked0;
 static int stat_marked1;
 static int stat_marked2;
 static int stat_markedp2;
+static uint64 marked_incorrect = 0;
 
 FILE *logs;
 
@@ -121,6 +122,7 @@ enum {
     INSTRACE_TLS_OFFS_BUF_PTR,
     INSTRACE_TLS_COUNT, 
 };
+
 app_pc curr_pc = 0;
 static reg_id_t tls_seg;
 static uint tls_offs;
@@ -167,6 +169,8 @@ struct AddressInfo {
   app_pc pc;
   app_pc address;
 };
+
+static uint64 icount = 0;
 static uint64 marked_alias_distances[MAX_STORE_ADDR + 1] = {};
 static uint64 expected_alias_distances[MAX_STORE_ADDR + 1] = {};
 static int last_alias_dist = 0;
@@ -189,6 +193,20 @@ void addAddress(app_pc pc, app_pc addr) {
   if (last_store_addrs_size < MAX_STORE_ADDR) {
     last_store_addrs_size++;
   }
+}
+
+bool checkMarkedLoad(){
+  for (int i = 0; i < getLBindex(); i++){
+    int marker = LoadBuffer[i].marker;
+    if(!LoadBuffer[i].checked){
+      for (int j = 0; j < getSBindex(); j++){
+	if(StoreBuffer[j].pc > LoadBuffer[i].pc){
+	  return false;
+	}
+      }
+    }
+  }
+  return false;
 }
 
 bool checkMarkCorrect(app_pc addr, int distance, int expected_dist, app_pc store_pc) {
@@ -258,9 +276,11 @@ ARMTracer(void *drcontext)
 	  if(marker_next_load){
 	    app_pc store_pc;
 	    int expected_dist;
-	    bool marked_ok = checkMarkCorrect(ins_ref->addr, f_marker,
-					      expected_dist, store_pc);
+	    //bool marked_ok = checkMarkCorrect(ins_ref->addr, f_marker,
+	    //expected_dist, store_pc);
 	    addLoad(ins_ref->pc,ins_ref->addr,f_marker);
+	    if(checkMarkedLoad())
+	      marked_incorrect++;
 	    gzprintf(data->deptrace, "L%ds%dr%dw%d "PIFX" %d\n", pcdiff,f_marker,ins_ref->read_registers,
 		     ins_ref->write_registers, (ptr_uint_t)ins_ref->addr,ins_ref->size);
 	    marker_next_load = false;
@@ -272,6 +292,8 @@ ARMTracer(void *drcontext)
 	}
 	else if(ins_ref->opcode == 2){ //write
 	  addStore(ins_ref->pc,ins_ref->addr);
+	  if(checkMarkedLoad())
+	    marked_incorrect++;
 	  addAddress(ins_ref->pc, ins_ref->addr);
 	  gzprintf(data->deptrace, "S%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
 		 ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
@@ -285,7 +307,7 @@ ARMTracer(void *drcontext)
 	br_pending_pcdiff = pcdiff;
       }
       else if (ins_ref->opcode == 8){ //other isntruction
-	gzprintf(data->deptrace, "OI%dr%dw%d\n", pcdiff, ins_ref->read_registers,
+	gzprintf(data->deptrace, "%dr%dw%d\n", pcdiff, ins_ref->read_registers,
 		 ins_ref->write_registers);
       }
       else if (ins_ref->opcode == 4){ //floating add/sub
@@ -891,12 +913,16 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
   int w_reg = 0;
   int r_reg = 0;
   for (int i = 0; i < instr_num_srcs(instr); i++) {
-    if(opnd_is_reg(instr_get_src(instr, i)))
+    if(opnd_is_reg(instr_get_src(instr, i))){
       r_reg++;
+      printf("SCR %s\n",get_register_name(opnd_get_reg(instr_get_src(instr,i))));
+    }
   }
   for (int i = 0; i < instr_num_dsts(instr); i++) {
-    if(opnd_is_reg(instr_get_dst(instr, i)))
+    if(opnd_is_reg(instr_get_dst(instr, i))){
       w_reg++;
+      printf("DST %s\n",get_register_name(opnd_get_reg(instr_get_dst(instr,i))));
+    }
   }    
   if(instr_is_cbr(instr)){
     instrument_branch(drcontext, bb, instr, w_reg, r_reg);

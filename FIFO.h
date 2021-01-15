@@ -66,10 +66,10 @@ int getLBindex(){return last_load_begin;}
 void printSB(int here, int there){
   DR_ASSERT(there <= STORE_BUFFER_SIZE);
   for (int i = here ; i < there ; i++)
-    printf("SB: PC %2x ADD %2x\n",StoreBuffer[i].pc,StoreBuffer[i].address);
+    printf("SB: PC "PIFX" ADD "PIFX"\n",StoreBuffer[i].pc,StoreBuffer[i].address);
 }
 void printLB(int here, int there){
   DR_ASSERT(there <= MARKED_LOAD_BUFFER_SIZE);
   for (int i = here ; i < there ; i++)
-    printf("LB: PC %2x ADD %2x MARK %d\n",LoadBuffer[i].pc,LoadBuffer[i].address,LoadBuffer[i].marker);
+    printf("LB: PC "PIFX" ADD "PIFX" MARK %d\n",LoadBuffer[i].pc,LoadBuffer[i].address,LoadBuffer[i].marker);
 }
