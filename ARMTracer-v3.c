@@ -57,7 +57,9 @@
 #include "utils.h"
 #include "drutil.h"
 #include "drx.h"
+#include "FIFO.h"
 #include <zlib.h>
+
 
 typedef struct _ins_ref_t {
   app_pc pc;
@@ -110,6 +112,7 @@ static int stat_marked0;
 static int stat_marked1;
 static int stat_marked2;
 static int stat_markedp2;
+
 FILE *logs;
 
 enum {
@@ -120,7 +123,9 @@ app_pc curr_pc = 0;
 static reg_id_t tls_seg;
 static uint tls_offs;
 static int tls_idx;
-bool instr_first = false;
+bool first_instr = true;
+app_pc endpc = 0;
+
 #define TLS_SLOT(tls_base, enum_val) (void **)((byte *)(tls_base) + tls_offs + (enum_val))
 #define BUF_PTR(tls_base) *(ins_ref_t **)TLS_SLOT(tls_base, INSTRACE_TLS_OFFS_BUF_PTR)
 
@@ -165,7 +170,12 @@ ARMTracer(void *drcontext)
     buf_ptr = BUF_PTR(data->seg_base);
     for (ins_ref = (ins_ref_t *)data->buf_base; ins_ref < buf_ptr; ins_ref++) {
       DR_ASSERT(ins_ref->opcode > 0 && ins_ref->opcode < 12);
+      if(first_instr){
+	gzprintf(data->deptrace,""PIFX"\n",ins_ref->pc);
+	first_instr = false;
+      }
       uint pcdiff = getPCdiff(ins_ref->pc);
+      endpc = endpc + pcdiff;
       if(br_pending){
 	gzprintf(data->deptrace, "B%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
 	if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
@@ -178,6 +188,7 @@ ARMTracer(void *drcontext)
 	if(ins_ref->opcode == 1){ //read
 	  stat_load++;
 	  if(marker_next_load){
+	    addLoad(ins_ref->pc,ins_ref->addr,f_marker);
 	    gzprintf(data->deptrace, "L%ds%dr%dw%d "PIFX" %d\n", pcdiff,f_marker,ins_ref->read_registers,
 		     ins_ref->write_registers, (ptr_uint_t)ins_ref->addr,ins_ref->size);
 	    marker_next_load = false;
@@ -188,6 +199,7 @@ ARMTracer(void *drcontext)
 		     ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
 	}
 	else if(ins_ref->opcode == 2) //write
+	  addStore(ins_ref->pc,ins_ref->addr);
 	  gzprintf(data->deptrace, "S%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
 		   ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
       }
@@ -941,7 +953,7 @@ event_thread_init(void *drcontext)
     //data->logf = log_stream_from_file(data->log);
     data->deptrace = trace_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer",
 				     DR_FILE_ALLOW_LARGE);
-    gzprintf(data->deptrace, "INITIAL PC HERE\n");
+    //gzprintf(data->deptrace, "INITIAL PC HERE\n");
     //fprintf(data->logf, "INITIAL PC HERE\n");
 
     logs = log_stream_from_file(log_file_open(client_id, drcontext, NULL /* using client lib path */, "ARMTracer-log",
@@ -962,6 +974,7 @@ event_thread_exit(void *drcontext)
     //log_stream_close(data->logf); /* closes fd too */
     dr_raw_mem_free(data->buf_base, MEM_BUF_SIZE);
     dr_thread_free(drcontext, data, sizeof(per_thread_t));
+    gzprintf(data->deptrace, ""PIFX"\n", endpc);
     gzclose(data->deptrace);
     
 }
@@ -984,6 +997,9 @@ event_exit(void)
     float lmarked1 = (((float)stat_marked1/stat_marked)*100);
     float lmarked2 = (((float)stat_marked2/stat_marked)*100);
     float lmarkedp2 = (((float)stat_markedp2/stat_marked)*100);
+
+    printSB(80,90);
+    printLB(0,10);
     
     fprintf(logs,
 	    "Loads Executed: %d\n" 
