@@ -87,6 +87,8 @@ enum {
   REF_TYPE_WRITE = 1,
 };
 
+#define LOOP_NOALIAS_DIST -999
+#define MAX_STORE_ADDR 100
 #define DISPLAY_STRING(msg) dr_printf("%s\n", msg);
 #define MAX_NUM_INS_REFS 8192
 #define MEM_BUF_SIZE (sizeof(ins_ref_t) * MAX_NUM_INS_REFS)
@@ -160,6 +162,72 @@ int final_marker_value[2] = {0}; //MAX 999
 int f_marker = 0;
 int marker_index = 0;
 
+struct AddressInfo {
+  uint64 icount;
+  app_pc pc;
+  app_pc address;
+};
+static uint64 marked_alias_distances[MAX_STORE_ADDR + 1] = {};
+static uint64 expected_alias_distances[MAX_STORE_ADDR + 1] = {};
+static int last_alias_dist = 0;
+static app_pc last_load_addr;
+static app_pc last_load_pc;
+static uint64 last_load_icount;
+struct AddressInfo last_store_addrs[MAX_STORE_ADDR];
+static app_pc last_store_addrs_size = 0;
+static uint64 last_store_addrs_begin = 0;
+static app_pc marked_instr_begin = 0;
+static app_pc marked_instr_end = 0;
+static uint64 load_mark_pessimistic_count = 0;
+static uint64 load_mark_incorrect_count = 0;
+
+void addAddress(app_pc pc, app_pc addr) {
+  last_store_addrs[last_store_addrs_begin].icount = icount;
+  last_store_addrs[last_store_addrs_begin].pc =  pc;
+  last_store_addrs[last_store_addrs_begin].address = addr;
+  last_store_addrs_begin = (last_store_addrs_begin + 1) % MAX_STORE_ADDR;
+  if (last_store_addrs_size < MAX_STORE_ADDR) {
+    last_store_addrs_size++;
+  }
+}
+
+bool checkMarkCorrect(app_pc addr, int distance, int expected_dist, app_pc store_pc) {
+  assert((distance >= 0 && distance < MAX_STORE_ADDR) ||
+	 distance == LOOP_NOALIAS_DIST);
+
+  struct AddressInfo addrInfo;
+
+  int c = 0;
+  for (int i = (last_store_addrs_begin + MAX_STORE_ADDR - 1) % MAX_STORE_ADDR,
+	 end = MAX_STORE_ADDR - 1;
+       c < end; i = (i + MAX_STORE_ADDR - 1) % MAX_STORE_ADDR, ++c) {
+    if (last_store_addrs[i].address == addr) {
+      store_pc = last_store_addrs[i].pc;
+      break;
+    }
+  }
+  if (distance >= 0 && distance < c)
+    load_mark_pessimistic_count += 1;
+  expected_dist = c;
+
+  assert(expected_dist < MAX_STORE_ADDR);
+  expected_alias_distances[expected_dist] += 1;
+
+  for (int i = (last_store_addrs_begin + MAX_STORE_ADDR - 1) % MAX_STORE_ADDR,
+	 end = distance < 0 ? MAX_STORE_ADDR - 1 : distance, count = 0;
+       count < end; i = (i + MAX_STORE_ADDR - 1) % MAX_STORE_ADDR, ++count) {
+    if (last_store_addrs[i].address == addr) {
+      addrInfo = last_store_addrs[i];
+      break;
+    }
+  }
+
+  if (addrInfo.icount == 0)
+    return true;
+  else if (distance >= 0)
+    return false;
+}
+
 static void
 ARMTracer(void *drcontext)
 {
@@ -188,6 +256,10 @@ ARMTracer(void *drcontext)
 	if(ins_ref->opcode == 1){ //read
 	  stat_load++;
 	  if(marker_next_load){
+	    app_pc store_pc;
+	    int expected_dist;
+	    bool marked_ok = checkMarkCorrect(ins_ref->addr, f_marker,
+					      expected_dist, store_pc);
 	    addLoad(ins_ref->pc,ins_ref->addr,f_marker);
 	    gzprintf(data->deptrace, "L%ds%dr%dw%d "PIFX" %d\n", pcdiff,f_marker,ins_ref->read_registers,
 		     ins_ref->write_registers, (ptr_uint_t)ins_ref->addr,ins_ref->size);
@@ -198,10 +270,12 @@ ARMTracer(void *drcontext)
 	    gzprintf(data->deptrace, "L%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
 		     ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
 	}
-	else if(ins_ref->opcode == 2) //write
+	else if(ins_ref->opcode == 2){ //write
 	  addStore(ins_ref->pc,ins_ref->addr);
+	  addAddress(ins_ref->pc, ins_ref->addr);
 	  gzprintf(data->deptrace, "S%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
-		   ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+		 ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	}
       }
       else if (ins_ref->opcode == 3){ //Branch
 	DR_ASSERT(!br_pending);
