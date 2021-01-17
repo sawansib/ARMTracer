@@ -114,7 +114,7 @@ static int stat_marked0;
 static int stat_marked1;
 static int stat_marked2;
 static int stat_markedp2;
-static uint64 marked_incorrect = 0;
+static uint64 stat_incorrect = 0;
 
 FILE *logs;
 
@@ -195,18 +195,19 @@ void addAddress(app_pc pc, app_pc addr) {
   }
 }
 
-bool checkMarkedLoad(){
-  for (int i = 0; i < getLBindex(); i++){
-    int marker = LoadBuffer[i].marker;
-    if(!LoadBuffer[i].checked){
-      for (int j = 0; j < getSBindex(); j++){
-	if(StoreBuffer[j].pc > LoadBuffer[i].pc){
-	  return false;
-	}
-      }
+bool checkMarkedLoad(uint64 marker, app_pc ld_addr){
+  // for(int i = 90; i < getSBindex(); i++)
+  // printf("DEBUG: SB index %d st_addr "PIFX" \n",i, StoreBuffer[i].address);
+  //printf("DEBUG: checkMarked marker %d ld_addr "PIFX" \n",marker, ld_addr);
+  int distance = getSBindex() - marker;
+  //printf("distance %d\n",distance);
+  for (int i = getSBindex() - 1; i >= distance; i--){
+    //printf("DEBUG: checking.... index %d st_addr "PIFX" \n",i, StoreBuffer[i].address);
+    if(StoreBuffer[i].address == ld_addr){
+      return false;
     }
   }
-  return false;
+  return true;
 }
 
 bool checkMarkCorrect(app_pc addr, int distance, int expected_dist, app_pc store_pc) {
@@ -278,9 +279,10 @@ ARMTracer(void *drcontext)
 	    int expected_dist;
 	    //bool marked_ok = checkMarkCorrect(ins_ref->addr, f_marker,
 	    //expected_dist, store_pc);
-	    addLoad(ins_ref->pc,ins_ref->addr,f_marker);
-	    if(checkMarkedLoad())
-	      marked_incorrect++;
+	    if(f_marker != 0){
+	      if(!checkMarkedLoad(f_marker,ins_ref->addr))
+		stat_incorrect++;
+	    }
 	    gzprintf(data->deptrace, "L%ds%dr%dw%d "PIFX" %d\n", pcdiff,f_marker,ins_ref->read_registers,
 		     ins_ref->write_registers, (ptr_uint_t)ins_ref->addr,ins_ref->size);
 	    marker_next_load = false;
@@ -292,8 +294,6 @@ ARMTracer(void *drcontext)
 	}
 	else if(ins_ref->opcode == 2){ //write
 	  addStore(ins_ref->pc,ins_ref->addr);
-	  if(checkMarkedLoad())
-	    marked_incorrect++;
 	  addAddress(ins_ref->pc, ins_ref->addr);
 	  gzprintf(data->deptrace, "S%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
 		 ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
@@ -915,13 +915,13 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
   for (int i = 0; i < instr_num_srcs(instr); i++) {
     if(opnd_is_reg(instr_get_src(instr, i))){
       r_reg++;
-      printf("SCR %s\n",get_register_name(opnd_get_reg(instr_get_src(instr,i))));
+      //printf("SCR %s\n",get_register_name(opnd_get_reg(instr_get_src(instr,i))));
     }
   }
   for (int i = 0; i < instr_num_dsts(instr); i++) {
     if(opnd_is_reg(instr_get_dst(instr, i))){
       w_reg++;
-      printf("DST %s\n",get_register_name(opnd_get_reg(instr_get_dst(instr,i))));
+      //printf("DST %s\n",get_register_name(opnd_get_reg(instr_get_dst(instr,i))));
     }
   }    
   if(instr_is_cbr(instr)){
@@ -1097,9 +1097,10 @@ event_exit(void)
     float lmarked1 = (((float)stat_marked1/stat_marked)*100);
     float lmarked2 = (((float)stat_marked2/stat_marked)*100);
     float lmarkedp2 = (((float)stat_markedp2/stat_marked)*100);
-
-    printSB(80,90);
-    printLB(0,10);
+    float lincorrect = (((float)stat_incorrect/stat_marked)*100);
+    
+    //printSB(90,100);
+    //printLB(0,10);
     
     fprintf(logs,
 	    "Loads Executed: %d\n" 
@@ -1107,13 +1108,15 @@ event_exit(void)
 	    "Marked at 0: %d (%.4f%)\n"
 	    "Marked at 1: %d (%.4f%)\n"
 	    "Marked at 2: %d (%.4f%)\n"
-	    "Marked at 2+: %d (%.4f%)\n",
+	    "Marked at 2+: %d (%.4f%)\n"
+	    "Marked incorrect: %d (%.4f%)\n",
 	    stat_load,
 	    stat_marked,lmarked,
 	    stat_marked0,lmarked0,
 	    stat_marked1,lmarked1,
 	    stat_marked2,lmarked2,
-	    stat_markedp2,lmarkedp2
+	    stat_markedp2,lmarkedp2,
+	    stat_incorrect,lincorrect
 	    );
     log_stream_close(logs);
     dr_mutex_destroy(mutex);

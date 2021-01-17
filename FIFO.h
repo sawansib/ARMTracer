@@ -39,6 +39,7 @@ void addStore(app_pc pc, app_pc addr) {
   if(last_store_begin >= STORE_BUFFER_SIZE - 1 ){
     for(int i = 0; i < STORE_BUFFER_SIZE ; i++){
       StoreBuffer[i].pc = StoreBuffer[i+1].pc;
+      StoreBuffer[i].address = StoreBuffer[i+1].address;
     }
     last_store_begin = STORE_BUFFER_SIZE - 1;
   }
@@ -53,6 +54,7 @@ void addLoad(app_pc pc, app_pc addr, int marker) {
   if(last_load_begin >= MARKED_LOAD_BUFFER_SIZE - 1 ){
     for(int i = 0; i < MARKED_LOAD_BUFFER_SIZE ; i++){
       LoadBuffer[i].pc = LoadBuffer[i+1].pc;
+      LoadBuffer[i].address = LoadBuffer[i+1].address;
     }
     last_load_begin = MARKED_LOAD_BUFFER_SIZE - 1;
   }
