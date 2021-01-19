@@ -59,7 +59,7 @@
 #include "drx.h"
 #include "FIFO.h"
 #include <zlib.h>
-
+#include "reg2reg.h"
 
 typedef struct _ins_ref_t {
   app_pc pc;
@@ -80,7 +80,16 @@ typedef struct _ins_ref_t {
   app_pc br_pending_target;
   int read_registers;
   int write_registers;
-  } ins_ref_t;
+  int w_reg_1;
+  int w_reg_2;
+  int w_reg_3;
+  int w_reg_4;
+  int r_reg_1;
+  int r_reg_2;
+  int r_reg_3;
+  int r_reg_4;
+  int is_cb;
+} ins_ref_t;
 
 enum {
   REF_TYPE_READ = 0,
@@ -154,7 +163,8 @@ int array_to_num(int arr[],int n){
 
 app_pc br_pending_pc = 0;
 app_pc br_pending_target = 0;
-bool br_pending = false;
+bool br_pending_cb = false;
+bool br_pending_ncb = false;
 uint br_pending_pcdiff = 0;
 bool marker_begin = false;
 bool marker_end = false;
@@ -263,14 +273,24 @@ ARMTracer(void *drcontext)
       }
       uint pcdiff = getPCdiff(ins_ref->pc);
       endpc = endpc + pcdiff;
-      if(br_pending){
+      if(br_pending_cb){
 	gzprintf(data->deptrace, "B%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
 	if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
 	  gzprintf(data->deptrace,"\n");
 	else
 	  gzprintf(data->deptrace,"*\n");
-	br_pending = false;
+	br_pending_cb = false;
       }
+
+      if(br_pending_ncb){
+	gzprintf(data->deptrace, "J%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
+	if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
+	  gzprintf(data->deptrace,"\n");
+	else
+	  gzprintf(data->deptrace,"*\n");
+	br_pending_ncb = false;
+      }
+      
       if(ins_ref->opcode == 1 || ins_ref->opcode == 2){ //read or write
 	if(ins_ref->opcode == 1){ //read
 	  stat_load++;
@@ -283,48 +303,218 @@ ARMTracer(void *drcontext)
 	      if(!checkMarkedLoad(f_marker,ins_ref->addr))
 		stat_incorrect++;
 	    }
-	    gzprintf(data->deptrace, "L%ds%dr%dw%d "PIFX" %d\n", pcdiff,f_marker,ins_ref->read_registers,
-		     ins_ref->write_registers, (ptr_uint_t)ins_ref->addr,ins_ref->size);
+	    gzprintf(data->deptrace, "L%ds%d",pcdiff,f_marker);
+	    if(ins_ref->read_registers == 1)  // read printing
+	      gzprintf(data->deptrace, "r%d", ins_ref->r_reg_1);
+	    else if(ins_ref->read_registers == 2)
+	      gzprintf(data->deptrace, "r%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2);
+	    else if(ins_ref->read_registers == 3)
+	      gzprintf(data->deptrace, "r%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3);
+	    else if(ins_ref->read_registers == 4)
+	      gzprintf(data->deptrace, "r%dr%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3, ins_ref->r_reg_4);
+	    else if(ins_ref->read_registers != 0)
+	      DR_ASSERT(false);
+	    if(ins_ref->write_registers == 1)  // write printing
+	      gzprintf(data->deptrace, "w%d", ins_ref->w_reg_1);
+	    else if(ins_ref->write_registers == 2)
+	      gzprintf(data->deptrace, "w%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2);
+	    else if(ins_ref->write_registers == 3)
+	      gzprintf(data->deptrace, "w%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3);
+	    else if(ins_ref->write_registers == 4)
+	      gzprintf(data->deptrace, "w%dw%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3, ins_ref->w_reg_4);
+	    else if(ins_ref->read_registers != 0)
+	      DR_ASSERT(false);
+	    gzprintf(data->deptrace, " "PIFX" %d\n", (ptr_uint_t)ins_ref->addr,ins_ref->size);
 	    marker_next_load = false;
 	    f_marker = 0;
 	    stat_marked++;
-	  }else
-	    gzprintf(data->deptrace, "L%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
-		     ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	  }
+	  else{
+	    gzprintf(data->deptrace, "L%d",pcdiff);
+	    if(ins_ref->read_registers == 1)  // read printing
+	      gzprintf(data->deptrace, "r%d", ins_ref->r_reg_1);
+	    else if(ins_ref->read_registers == 2)
+	      gzprintf(data->deptrace, "r%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2);
+	    else if(ins_ref->read_registers == 3)
+	      gzprintf(data->deptrace, "r%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3);
+	    else if(ins_ref->read_registers == 4)
+	      gzprintf(data->deptrace, "r%dr%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3, ins_ref->r_reg_4);
+	    else if(ins_ref->read_registers != 0)
+	      DR_ASSERT(false);
+	    if(ins_ref->write_registers == 1)  // write printing
+	      gzprintf(data->deptrace, "w%d", ins_ref->w_reg_1);
+	    else if(ins_ref->write_registers == 2)
+	      gzprintf(data->deptrace, "w%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2);
+	    else if(ins_ref->write_registers == 3)
+	      gzprintf(data->deptrace, "w%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3);
+	    else if(ins_ref->write_registers == 4)
+	      gzprintf(data->deptrace, "w%dw%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3, ins_ref->w_reg_4);
+	    else if(ins_ref->read_registers != 0)
+	      DR_ASSERT(false);
+	    gzprintf(data->deptrace, " "PIFX" %d\n", (ptr_uint_t)ins_ref->addr,ins_ref->size);
+	  }
 	}
 	else if(ins_ref->opcode == 2){ //write
 	  addStore(ins_ref->pc,ins_ref->addr);
 	  addAddress(ins_ref->pc, ins_ref->addr);
-	  gzprintf(data->deptrace, "S%dr%dw%d "PIFX" %d\n", pcdiff,ins_ref->read_registers,
-		 ins_ref->write_registers,(ptr_uint_t)ins_ref->addr,ins_ref->size);
+	  gzprintf(data->deptrace, "S%d",pcdiff);
+	  if(ins_ref->read_registers == 1)  // read printing
+	    gzprintf(data->deptrace, "r%d", ins_ref->r_reg_1);
+	  else if(ins_ref->read_registers == 2)
+	    gzprintf(data->deptrace, "r%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2);
+	  else if(ins_ref->read_registers == 3)
+	    gzprintf(data->deptrace, "r%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3);
+	  else if(ins_ref->read_registers == 4)
+	    gzprintf(data->deptrace, "r%dr%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3, ins_ref->r_reg_4);
+	  else if(ins_ref->read_registers != 0)
+	    DR_ASSERT(false);
+	  if(ins_ref->write_registers == 1)  // write printing
+	    gzprintf(data->deptrace, "w%d", ins_ref->w_reg_1);
+	  else if(ins_ref->write_registers == 2)
+	    gzprintf(data->deptrace, "w%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2);
+	  else if(ins_ref->write_registers == 3)
+	    gzprintf(data->deptrace, "w%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3);
+	  else if(ins_ref->write_registers == 4)
+	    gzprintf(data->deptrace, "w%dw%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3, ins_ref->w_reg_4);
+	  else if(ins_ref->write_registers != 0){
+	    printf("read_register:: %d\n",ins_ref->read_registers);
+	    DR_ASSERT(false);
+	  }
+	  gzprintf(data->deptrace," "PIFX" %d\n", (ptr_uint_t)ins_ref->addr,ins_ref->size);
 	}
       }
       else if (ins_ref->opcode == 3){ //Branch
-	DR_ASSERT(!br_pending);
-	br_pending = true;
+	DR_ASSERT(!br_pending_cb || !br_pending_ncb);
+	if(ins_ref->is_cb)
+	  br_pending_cb = true;
+	else
+	  br_pending_ncb = true;
 	br_pending_target = ins_ref->target;
 	br_pending_pc = ins_ref->pc;
 	br_pending_pcdiff = pcdiff;
       }
       else if (ins_ref->opcode == 8){ //other isntruction
-	gzprintf(data->deptrace, "%dr%dw%d\n", pcdiff, ins_ref->read_registers,
-		 ins_ref->write_registers);
+	gzprintf(data->deptrace, "%d", pcdiff);
+	if(ins_ref->read_registers == 1)  // read printing
+	  gzprintf(data->deptrace, "r%d", ins_ref->r_reg_1);
+	else if(ins_ref->read_registers == 2)
+	  gzprintf(data->deptrace, "r%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2);
+	else if(ins_ref->read_registers == 3)
+	  gzprintf(data->deptrace, "r%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3);
+	else if(ins_ref->read_registers == 4)
+	  gzprintf(data->deptrace, "r%dr%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3, ins_ref->r_reg_4);
+	else if(ins_ref->read_registers != 0)
+	  DR_ASSERT(false);
+	if(ins_ref->write_registers == 1)  // write printing
+	  gzprintf(data->deptrace, "w%d", ins_ref->w_reg_1);
+	else if(ins_ref->write_registers == 2)
+	  gzprintf(data->deptrace, "w%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2);
+	else if(ins_ref->write_registers == 3)
+	  gzprintf(data->deptrace, "w%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3);
+	else if(ins_ref->write_registers == 4)
+	  gzprintf(data->deptrace, "w%dw%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3, ins_ref->w_reg_4);
+	else if(ins_ref->write_registers != 0)
+	  DR_ASSERT(false);
+	gzprintf(data->deptrace, "\n");
       }
       else if (ins_ref->opcode == 4){ //floating add/sub
-	gzprintf(data->deptrace, "A%dr%dw%d\n", pcdiff, ins_ref->read_registers,
-		 ins_ref->write_registers);
+	gzprintf(data->deptrace, "A%d", pcdiff);
+	if(ins_ref->read_registers == 1)  // read printing
+	  gzprintf(data->deptrace, "r%d", ins_ref->r_reg_1);
+	else if(ins_ref->read_registers == 2)
+	  gzprintf(data->deptrace, "r%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2);
+	else if(ins_ref->read_registers == 3)
+	  gzprintf(data->deptrace, "r%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3);
+	else if(ins_ref->read_registers == 4)
+	  gzprintf(data->deptrace, "r%dr%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3, ins_ref->r_reg_4);
+	else if(ins_ref->read_registers != 0)
+	  DR_ASSERT(false);
+	if(ins_ref->write_registers == 1)  // write printing
+	  gzprintf(data->deptrace, "w%d", ins_ref->w_reg_1);
+	else if(ins_ref->write_registers == 2)
+	  gzprintf(data->deptrace, "w%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2);
+	else if(ins_ref->write_registers == 3)
+	  gzprintf(data->deptrace, "w%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3);
+	else if(ins_ref->write_registers == 4)
+	  gzprintf(data->deptrace, "w%dw%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3, ins_ref->w_reg_4);
+	else if(ins_ref->write_registers != 0)
+	  DR_ASSERT(false);
+	gzprintf(data->deptrace, "\n");
       }
       else if (ins_ref->opcode == 5){ //floating Mul
-	gzprintf(data->deptrace, "M%dr%dw%d\n", pcdiff, ins_ref->read_registers,
-		                  ins_ref->write_registers);
+	gzprintf(data->deptrace, "M%d", pcdiff);
+	if(ins_ref->read_registers == 1)  // read printing
+	  gzprintf(data->deptrace, "r%d", ins_ref->r_reg_1);
+	else if(ins_ref->read_registers == 2)
+	  gzprintf(data->deptrace, "r%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2);
+	else if(ins_ref->read_registers == 3)
+	  gzprintf(data->deptrace, "r%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3);
+	else if(ins_ref->read_registers == 4)
+	  gzprintf(data->deptrace, "r%dr%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3, ins_ref->r_reg_4);
+	else if(ins_ref->read_registers != 0)
+	  DR_ASSERT(false);
+	if(ins_ref->write_registers == 1)  // write printing
+	  gzprintf(data->deptrace, "w%d", ins_ref->w_reg_1);
+	else if(ins_ref->write_registers == 2)
+	  gzprintf(data->deptrace, "w%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2);
+	else if(ins_ref->write_registers == 3)
+	  gzprintf(data->deptrace, "w%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3);
+	else if(ins_ref->write_registers == 4)
+	  gzprintf(data->deptrace, "w%dw%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3, ins_ref->w_reg_4);
+	else if(ins_ref->write_registers != 0)
+	  DR_ASSERT(false);
+	gzprintf(data->deptrace, "\n");
+	
       }
       else if (ins_ref->opcode == 6){ //floating Div
-	gzprintf(data->deptrace, "D%dr%dw%d\n", pcdiff, ins_ref->read_registers,
-		                  ins_ref->write_registers);
+	gzprintf(data->deptrace, "D%d", pcdiff);
+	if(ins_ref->read_registers == 1)  // read printing
+	  gzprintf(data->deptrace, "r%d", ins_ref->r_reg_1);
+	else if(ins_ref->read_registers == 2)
+	  gzprintf(data->deptrace, "r%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2);
+	else if(ins_ref->read_registers == 3)
+	  gzprintf(data->deptrace, "r%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3);
+	else if(ins_ref->read_registers == 4)
+	  gzprintf(data->deptrace, "r%dr%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3, ins_ref->r_reg_4);
+	else if(ins_ref->read_registers != 0)
+	  DR_ASSERT(false);
+	if(ins_ref->write_registers == 1)  // write printing
+	  gzprintf(data->deptrace, "w%d", ins_ref->w_reg_1);
+	else if(ins_ref->write_registers == 2)
+	  gzprintf(data->deptrace, "w%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2);
+	else if(ins_ref->write_registers == 3)
+	  gzprintf(data->deptrace, "w%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3);
+	else if(ins_ref->write_registers == 4)
+	  gzprintf(data->deptrace, "w%dw%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3, ins_ref->w_reg_4);
+	else if(ins_ref->write_registers != 0)
+	  DR_ASSERT(false);
+	gzprintf(data->deptrace, "\n");
+	
       }
       else if (ins_ref->opcode == 7){ //floating sqrt
-	gzprintf(data->deptrace, "Q%dr%dw%d\n", pcdiff, ins_ref->read_registers,
-		                  ins_ref->write_registers);
+	gzprintf(data->deptrace, "Q%d", pcdiff);
+	if(ins_ref->read_registers == 1)  // read printing
+	  gzprintf(data->deptrace, "r%d", ins_ref->r_reg_1);
+	else if(ins_ref->read_registers == 2)
+	  gzprintf(data->deptrace, "r%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2);
+	else if(ins_ref->read_registers == 3)
+	  gzprintf(data->deptrace, "r%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3);
+	else if(ins_ref->read_registers == 4)
+	  gzprintf(data->deptrace, "r%dr%dr%dr%d", ins_ref->r_reg_1, ins_ref->r_reg_2, ins_ref->r_reg_3, ins_ref->r_reg_4);
+	else if(ins_ref->read_registers != 0)
+	  DR_ASSERT(false);
+	if(ins_ref->write_registers == 1)  // write printing
+	  gzprintf(data->deptrace, "w%d", ins_ref->w_reg_1);
+	else if(ins_ref->write_registers == 2)
+	  gzprintf(data->deptrace, "w%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2);
+	else if(ins_ref->write_registers == 3)
+	  gzprintf(data->deptrace, "w%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3);
+	else if(ins_ref->write_registers == 4)
+	  gzprintf(data->deptrace, "w%dw%dw%dw%d", ins_ref->w_reg_1, ins_ref->w_reg_2, ins_ref->w_reg_3, ins_ref->w_reg_4);
+	else if(ins_ref->write_registers != 0)
+	  DR_ASSERT(false);
+	gzprintf(data->deptrace, "\n");
+	
       }
       else if (ins_ref->opcode == 9){//marker begin 
 	//printf("R11\n");
@@ -402,6 +592,61 @@ insert_save_write_registers(void *drcontext, instrlist_t *ilist, instr_t *where,
 }
 
 static void
+insert_save_write_registers1(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			    reg_id_t scratch, int write_registers)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(write_registers)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, w_reg_1)),
+				    opnd_create_reg(scratch)));
+}
+
+static void
+insert_save_write_registers2(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			     reg_id_t scratch, int write_registers)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(write_registers)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, w_reg_2)),
+				    opnd_create_reg(scratch)));
+}
+static void
+insert_save_write_registers3(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			     reg_id_t scratch, int write_registers)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(write_registers)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, w_reg_3)),
+				    opnd_create_reg(scratch)));
+}
+static void
+insert_save_write_registers4(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			     reg_id_t scratch, int write_registers)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(write_registers)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, w_reg_4)),
+				    opnd_create_reg(scratch)));
+}
+
+
+static void
 insert_save_read_registers(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
 			   reg_id_t scratch, int read_registers)
 {
@@ -412,6 +657,74 @@ insert_save_read_registers(void *drcontext, instrlist_t *ilist, instr_t *where, 
   MINSERT(ilist, where,
 	  XINST_CREATE_store_2bytes(
 				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, read_registers)),
+				    opnd_create_reg(scratch)));
+}
+
+static void
+insert_save_read_registers1(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			   reg_id_t scratch, int read_registers)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(read_registers)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, r_reg_1)),
+				    opnd_create_reg(scratch)));
+}
+
+static void
+insert_save_read_registers2(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			    reg_id_t scratch, int read_registers)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(read_registers)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, r_reg_2)),
+				    opnd_create_reg(scratch)));
+}
+static void
+insert_save_read_registers3(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			    reg_id_t scratch, int read_registers)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(read_registers)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, r_reg_3)),
+				    opnd_create_reg(scratch)));
+}
+static void
+insert_save_read_registers4(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			    reg_id_t scratch, int read_registers)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(read_registers)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, r_reg_4)),
+				    opnd_create_reg(scratch)));
+}
+
+static void
+insert_save_branch_type(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			    reg_id_t scratch, int is_cb)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(is_cb)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, is_cb)),
 				    opnd_create_reg(scratch)));
 }
 
@@ -580,7 +893,7 @@ insert_save_other(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t 
 
 
 static void
-instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int marker_value, int write_registers, int read_registers)
+instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int marker_value, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -595,6 +908,18 @@ instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int m
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
 
   //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
@@ -613,7 +938,7 @@ instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int m
 }
 
 static void
-instrument_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, int marker_value, int write_registers, int read_registers)
+instrument_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, int marker_value, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -628,6 +953,17 @@ instrument_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, int
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
   //                  instr_get_opcode(where));
@@ -646,7 +982,7 @@ instrument_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, int
 
 
 static void
-instrument_marker_begin(void *drcontext, instrlist_t *ilist, instr_t *where , int write_registers, int read_registers)
+instrument_marker_begin(void *drcontext, instrlist_t *ilist, instr_t *where , int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -661,6 +997,17 @@ instrument_marker_begin(void *drcontext, instrlist_t *ilist, instr_t *where , in
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
   //                  instr_get_opcode(where));
@@ -677,7 +1024,7 @@ instrument_marker_begin(void *drcontext, instrlist_t *ilist, instr_t *where , in
 
 
 static void
-instrument_instr(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers)
+instrument_instr(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
     reg_id_t reg_ptr, reg_tmp;
     if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -694,6 +1041,17 @@ instrument_instr(void *drcontext, instrlist_t *ilist, instr_t *where, int write_
     //                  instr_get_opcode(where));
     insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
     insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+    insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+    insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+    insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+    insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+    insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+    insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+    insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+    insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
     
     insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		       8);
@@ -708,7 +1066,7 @@ instrument_instr(void *drcontext, instrlist_t *ilist, instr_t *where, int write_
 
 
 static void
-instrument_fp_addsub(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers)
+instrument_fp_addsub(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -724,6 +1082,17 @@ instrument_fp_addsub(void *drcontext, instrlist_t *ilist, instr_t *where, int wr
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     4);
@@ -737,7 +1106,7 @@ instrument_fp_addsub(void *drcontext, instrlist_t *ilist, instr_t *where, int wr
 }
 
 static void
-instrument_fp_mul(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers)
+instrument_fp_mul(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -753,6 +1122,17 @@ instrument_fp_mul(void *drcontext, instrlist_t *ilist, instr_t *where, int write
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     5);
@@ -767,7 +1147,7 @@ instrument_fp_mul(void *drcontext, instrlist_t *ilist, instr_t *where, int write
 
 
 static void
-instrument_fp_div(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers)
+instrument_fp_div(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -782,6 +1162,17 @@ instrument_fp_div(void *drcontext, instrlist_t *ilist, instr_t *where, int write
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     6);
@@ -796,7 +1187,7 @@ instrument_fp_div(void *drcontext, instrlist_t *ilist, instr_t *where, int write
 
 
 static void
-instrument_fp_sqrt(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers)
+instrument_fp_sqrt(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -812,6 +1203,17 @@ instrument_fp_sqrt(void *drcontext, instrlist_t *ilist, instr_t *where, int writ
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     7);
@@ -827,7 +1229,7 @@ instrument_fp_sqrt(void *drcontext, instrlist_t *ilist, instr_t *where, int writ
 
 static void
 instrument_mem(void *drcontext, instrlist_t *ilist, instr_t *where, opnd_t ref,
-	       bool write, int write_registers, int read_registers)
+	       bool write, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -856,6 +1258,17 @@ instrument_mem(void *drcontext, instrlist_t *ilist, instr_t *where, opnd_t ref,
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_operation_type(drcontext, ilist, where, reg_ptr, reg_tmp, true);
   //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
@@ -870,7 +1283,7 @@ instrument_mem(void *drcontext, instrlist_t *ilist, instr_t *where, opnd_t ref,
 }
 
 static void
-instrument_branch(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers)
+instrument_branch(void *drcontext, instrlist_t *ilist, instr_t *where, int is_cb,  int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -888,9 +1301,21 @@ instrument_branch(void *drcontext, instrlist_t *ilist, instr_t *where, int write
   insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
   insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
+  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
+  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
+
+  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
+  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
+
+  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
+  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
+
+  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     3);
+  insert_save_branch_type(drcontext, ilist, where, reg_ptr, reg_tmp, is_cb);
   insert_save_branch(drcontext, ilist, where, reg_ptr, reg_tmp, 1);
   insert_save_branch_target(drcontext, ilist, where, reg_ptr, reg_tmp, target_pc);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
@@ -910,51 +1335,93 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
   if (!instr_is_app(instr))
     return DR_EMIT_DEFAULT;
 
+  int w_arr[3] = {0}; //MAX 4
+  int r_arr[4] = {0}; //MAX 4
+  
   int w_reg = 0;
   int r_reg = 0;
   for (int i = 0; i < instr_num_srcs(instr); i++) {
     if(opnd_is_reg(instr_get_src(instr, i))){
-      r_reg++;
-      //printf("SCR %s\n",get_register_name(opnd_get_reg(instr_get_src(instr,i))));
+      const char *reg_name_src = get_register_name(opnd_get_reg(instr_get_src(instr,i)));
+      if(reg_name_src[1] == '0' || reg_name_src[1] == '1' ||
+      	 reg_name_src[1] == '2' || reg_name_src[1] == '3' ||
+      	 reg_name_src[1] == '4' || reg_name_src[1] == '5' ||
+      	 reg_name_src[1] == '6' || reg_name_src[1] == '7' ||
+      	 reg_name_src[1] == '8' || reg_name_src[1] == '9' )
+	{
+	  if(reg_name_src[0] == 'w' || reg_name_src[0] == 'x')
+	    r_arr[r_reg] = reg2reg(reg_name_src);
+	  else if(reg_name_src[0] == 'b' || reg_name_src[0] == 'h' ||
+		  reg_name_src[0] == 's' || reg_name_src[0] == 'd' ||
+		  reg_name_src[0] == 'q')
+	    r_arr[r_reg] = reg2regfp(reg_name_src);
+	  else
+	    DR_ASSERT(false);
+	  //printf("SCR %d %d %s\n",instr_num_srcs(instr),r_arr[r_reg],get_register_name(opnd_get_reg(instr_get_src(instr,i))));
+	  r_reg++;
+	  DR_ASSERT(r_reg <= 4);
+	}
     }
   }
   for (int i = 0; i < instr_num_dsts(instr); i++) {
     if(opnd_is_reg(instr_get_dst(instr, i))){
-      w_reg++;
-      //printf("DST %s\n",get_register_name(opnd_get_reg(instr_get_dst(instr,i))));
+      const char *reg_name_dst = get_register_name(opnd_get_reg(instr_get_dst(instr,i)));
+      if(reg_name_dst[1] == '0' || reg_name_dst[1] == '1' ||
+	 reg_name_dst[1] == '2' || reg_name_dst[1] == '3' ||
+	 reg_name_dst[1] == '4' || reg_name_dst[1] == '5' ||
+	 reg_name_dst[1] == '6' || reg_name_dst[1] == '7' ||
+	 reg_name_dst[1] == '8' || reg_name_dst[1] == '9' )
+	{
+	  if(reg_name_dst[0] == 'w' || reg_name_dst[0] == 'x')
+	    w_arr[w_reg] = reg2reg(reg_name_dst);
+	  else if(reg_name_dst[0] == 'b' || reg_name_dst[0] == 'h' ||
+		  reg_name_dst[0] == 's' || reg_name_dst[0] == 'd' ||
+		  reg_name_dst[0] == 'q')
+	    w_arr[w_reg] = reg2regfp(reg_name_dst);
+	  else
+	    DR_ASSERT(false);
+	  //printf("DST %d %d %s\n",instr_num_dsts(instr),w_arr[w_reg],get_register_name(opnd_get_reg(instr_get_dst(instr,i))));
+	  w_reg++;
+	  DR_ASSERT(w_reg <= 4);
+	}
     }
-  }    
-  if(instr_is_cbr(instr)){
-    instrument_branch(drcontext, bb, instr, w_reg, r_reg);
+  }
+
+  if(instr_is_cti(instr)){
+    if(instr_is_cbr(instr)){ //conditional branches
+      instrument_branch(drcontext, bb, instr, 1, w_reg, r_reg, w_arr, r_arr);
+    }
+    else //all other branches 
+      instrument_branch(drcontext, bb, instr, 0, w_reg, r_reg, w_arr, r_arr);
   }
   else if(instr_reads_memory(instr) || instr_writes_memory(instr)){
     //FIXME::
     //instrument_instr(drcontext, bb, instr); //to instrument mem operation other then load store
     for (i = 0; i < instr_num_srcs(instr); i++) {
       if (opnd_is_memory_reference(instr_get_src(instr, i)))
-	instrument_mem(drcontext, bb, instr, instr_get_src(instr, i), false, w_reg, r_reg);
+	instrument_mem(drcontext, bb, instr, instr_get_src(instr, i), false, w_reg, r_reg, w_arr, r_arr);
     }
     
     for (i = 0; i < instr_num_dsts(instr); i++) {
       if (opnd_is_memory_reference(instr_get_dst(instr, i)))
-	instrument_mem(drcontext, bb, instr, instr_get_dst(instr, i), true, w_reg, r_reg);
+	instrument_mem(drcontext, bb, instr, instr_get_dst(instr, i), true, w_reg, r_reg, w_arr, r_arr);
     }
   }
   else if(!strcmp(decode_opcode_name(instr_get_opcode(instr)), "fadd") || !strcmp(decode_opcode_name(instr_get_opcode(instr)),"fsub"))
     { //fadd fsub
-      instrument_fp_addsub(drcontext, bb, instr, w_reg, r_reg);
+      instrument_fp_addsub(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
     }
   else if(!strcmp(decode_opcode_name(instr_get_opcode(instr)), "fmul")) //fmul
     {
-      instrument_fp_mul(drcontext, bb, instr, w_reg, r_reg);
+      instrument_fp_mul(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
     }
   else if(!strcmp(decode_opcode_name(instr_get_opcode(instr)), "fdiv")) //fdiv
     {
-      instrument_fp_div(drcontext, bb, instr, w_reg, r_reg);
+      instrument_fp_div(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
     }
   else if(!strcmp(decode_opcode_name(instr_get_opcode(instr)), "fsqrt")) //sqrt 
     {
-      instrument_fp_sqrt(drcontext, bb, instr, w_reg, r_reg);
+      instrument_fp_sqrt(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
     }
   else if (!strcmp(decode_opcode_name(instr_get_opcode(instr)), "orr"))
     {
@@ -965,45 +1432,45 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
 	//if(strcmp(get_register_name(reg_id), "wzr") && strcmp(get_register_name(reg_id), "xzr"))
 	// printf("C%s\n", get_register_name(reg_id));
 	if(!strcmp(get_register_name(reg_id), "x11")){
-	  instrument_marker_begin(drcontext, bb, instr, w_reg, r_reg);
+	  instrument_marker_begin(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
 	  marker = true; //set marker
 	}
 	if(!strcmp(get_register_name(reg_id), "x10") && marker){
 	  DR_ASSERT(marker);
 	  marker = false;
-	  instrument_marker_end(drcontext, bb, instr, atoi(marker_value), w_reg, r_reg);
+	  instrument_marker_end(drcontext, bb, instr, atoi(marker_value), w_reg, r_reg, w_arr, r_arr);
 	}
 	if(!strcmp(get_register_name(reg_id), "x0") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 0, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 0, w_reg, r_reg, w_arr, r_arr);
 	}
 	if(!strcmp(get_register_name(reg_id), "x1") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 1, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 1, w_reg, r_reg, w_arr, r_arr);
 	}
 	if (!strcmp(get_register_name(reg_id), "x2") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 2, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 2, w_reg, r_reg, w_arr, r_arr);
 	}
 	if (!strcmp(get_register_name(reg_id), "x3") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 3, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 3, w_reg, r_reg, w_arr, r_arr);
 	}
 	if (!strcmp(get_register_name(reg_id), "x4") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 4, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 4, w_reg, r_reg, w_arr, r_arr);
 	}
 	if (!strcmp(get_register_name(reg_id), "x5") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 5, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 5, w_reg, r_reg, w_arr, r_arr);
 	}
 	if (!strcmp(get_register_name(reg_id), "x6") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 6, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 6, w_reg, r_reg, w_arr, r_arr);
 	}
 	if (!strcmp(get_register_name(reg_id), "x7") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 7, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 7, w_reg, r_reg, w_arr, r_arr);
 	}
 	if (!strcmp(get_register_name(reg_id), "x9") && marker){
-	  instrument_marker_value(drcontext, bb, instr, 9, w_reg, r_reg);
+	  instrument_marker_value(drcontext, bb, instr, 9, w_reg, r_reg, w_arr, r_arr);
 	}
       }
     }
   else
-    instrument_instr(drcontext, bb, instr, w_reg, r_reg);
+    instrument_instr(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
   /* insert code once per bb to call clean_call for processing the buffer */
   if (drmgr_is_first_instr(drcontext, instr)
       /* XXX i#1698: there are constraints for code between ldrex/strex pairs,
