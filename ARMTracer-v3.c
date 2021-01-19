@@ -1343,7 +1343,12 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
   for (int i = 0; i < instr_num_srcs(instr); i++) {
     if(opnd_is_reg(instr_get_src(instr, i))){
       const char *reg_name_src = get_register_name(opnd_get_reg(instr_get_src(instr,i)));
-      if(reg_name_src[1] == '0' || reg_name_src[1] == '1' ||
+      if(!strcmp(reg_name_src, "xzr") || !strcmp(reg_name_src, "wzr")){
+	r_arr[r_reg] = 63; // 0-30 31 int GPR 31-62 32 fp/vector GPR
+	r_reg++;
+	DR_ASSERT(r_reg <= 4);
+      }
+      else if(reg_name_src[1] == '0' || reg_name_src[1] == '1' ||
       	 reg_name_src[1] == '2' || reg_name_src[1] == '3' ||
       	 reg_name_src[1] == '4' || reg_name_src[1] == '5' ||
       	 reg_name_src[1] == '6' || reg_name_src[1] == '7' ||
@@ -1366,7 +1371,12 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
   for (int i = 0; i < instr_num_dsts(instr); i++) {
     if(opnd_is_reg(instr_get_dst(instr, i))){
       const char *reg_name_dst = get_register_name(opnd_get_reg(instr_get_dst(instr,i)));
-      if(reg_name_dst[1] == '0' || reg_name_dst[1] == '1' ||
+      if(!strcmp(reg_name_dst, "xzr") || !strcmp(reg_name_dst, "wzr")){
+	w_arr[w_reg] = 63;
+	w_reg++;
+	DR_ASSERT(w_reg <= 4);
+      }
+      else if(reg_name_dst[1] == '0' || reg_name_dst[1] == '1' ||
 	 reg_name_dst[1] == '2' || reg_name_dst[1] == '3' ||
 	 reg_name_dst[1] == '4' || reg_name_dst[1] == '5' ||
 	 reg_name_dst[1] == '6' || reg_name_dst[1] == '7' ||
@@ -1380,9 +1390,9 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
 	    w_arr[w_reg] = reg2regfp(reg_name_dst);
 	  else
 	    DR_ASSERT(false);
-	  //printf("DST %d %d %s\n",instr_num_dsts(instr),w_arr[w_reg],get_register_name(opnd_get_reg(instr_get_dst(instr,i))));
 	  w_reg++;
 	  DR_ASSERT(w_reg <= 4);
+	  //printf("DST %d %d %s\n",instr_num_dsts(instr),w_arr[w_reg],get_register_name(opnd_get_reg(instr_get_dst(instr,i))));
 	}
     }
   }
