@@ -161,6 +161,18 @@ int array_to_num(int arr[],int n){
   return i;
 } 
 
+uint br_pending_r_reg = 0;
+uint br_pending_r_reg_1 = 0;
+uint br_pending_r_reg_2 = 0;
+uint br_pending_r_reg_3 = 0;
+uint br_pending_r_reg_4 = 0;
+
+uint br_pending_w_reg = 0;
+uint br_pending_w_reg_1 = 0;
+uint br_pending_w_reg_2 = 0;
+uint br_pending_w_reg_3 = 0;
+uint br_pending_w_reg_4 = 0;
+
 app_pc br_pending_pc = 0;
 app_pc br_pending_target = 0;
 bool br_pending_cb = false;
@@ -274,21 +286,87 @@ ARMTracer(void *drcontext)
       uint pcdiff = getPCdiff(ins_ref->pc);
       endpc = endpc + pcdiff;
       if(br_pending_cb){
-	gzprintf(data->deptrace, "B%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
+	//gzprintf(data->deptrace, "B%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
+	gzprintf(data->deptrace, "B%d", br_pending_pcdiff);
+	if(br_pending_r_reg == 1)  // read printing
+	  gzprintf(data->deptrace, "r%d",br_pending_r_reg_1);
+	else if(br_pending_r_reg == 2)
+	  gzprintf(data->deptrace, "r%dr%d", br_pending_r_reg_1, br_pending_r_reg_2);
+	else if(br_pending_r_reg == 3)
+	  gzprintf(data->deptrace, "r%dr%dr%d", br_pending_r_reg_1, br_pending_r_reg_2, br_pending_r_reg_3);
+	else if(br_pending_r_reg == 4)
+	  gzprintf(data->deptrace, "r%dr%dr%dr%d", br_pending_r_reg_1, br_pending_r_reg_2, br_pending_r_reg_3, br_pending_r_reg_4);
+	else if(br_pending_r_reg != 0)
+	  DR_ASSERT(false);
+	if(br_pending_w_reg == 1)  // write printing
+	  gzprintf(data->deptrace, "w%d",br_pending_w_reg_1);
+	else if(br_pending_w_reg == 2)
+	  gzprintf(data->deptrace, "w%dw%d", br_pending_w_reg_1, br_pending_w_reg_2);
+	else if(br_pending_w_reg == 3)
+	  gzprintf(data->deptrace, "w%dw%dw%d", br_pending_w_reg_1, br_pending_w_reg_2, br_pending_w_reg_3);
+	else if(br_pending_w_reg == 4)
+	  gzprintf(data->deptrace, "w%dw%dw%dw%d", br_pending_w_reg_1, br_pending_w_reg_2, br_pending_w_reg_3, br_pending_w_reg_4);
+	else if(br_pending_w_reg != 0)
+	  DR_ASSERT(false);
+	gzprintf(data->deptrace,"t%d", (ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc); 
 	if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
 	  gzprintf(data->deptrace,"\n");
 	else
 	  gzprintf(data->deptrace,"*\n");
 	br_pending_cb = false;
+	br_pending_r_reg = 0;
+	br_pending_r_reg_1 = 0;
+	br_pending_r_reg_2 = 0;
+	br_pending_r_reg_3 = 0;
+	br_pending_r_reg_4 = 0;
+	
+	br_pending_w_reg = 0;
+	br_pending_w_reg_1 = 0;
+	br_pending_w_reg_2 = 0;
+	br_pending_w_reg_3 = 0;
+	br_pending_w_reg_4 = 0;
       }
-
+      
       if(br_pending_ncb){
-	gzprintf(data->deptrace, "J%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
-	if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
-	  gzprintf(data->deptrace,"\n");
-	else
-	  gzprintf(data->deptrace,"*\n");
+	//gzprintf(data->deptrace, "J%d "PIFX"", br_pending_pcdiff, (ptr_uint_t)br_pending_target);
+	gzprintf(data->deptrace, "J%d", br_pending_pcdiff);
+	if(br_pending_r_reg == 1)  // read printing
+	  gzprintf(data->deptrace, "r%d",br_pending_r_reg_1);
+	else if(br_pending_r_reg == 2)
+	  gzprintf(data->deptrace, "r%dr%d", br_pending_r_reg_1, br_pending_r_reg_2);
+	else if(br_pending_r_reg == 3)
+	  gzprintf(data->deptrace, "r%dr%dr%d", br_pending_r_reg_1, br_pending_r_reg_2, br_pending_r_reg_3);
+	else if(br_pending_r_reg == 4)
+	  gzprintf(data->deptrace, "r%dr%dr%dr%d", br_pending_r_reg_1, br_pending_r_reg_2, br_pending_r_reg_3, br_pending_r_reg_4);
+	else if(br_pending_r_reg != 0)
+	  DR_ASSERT(false);
+	if(br_pending_w_reg == 1)  // write printing
+	  gzprintf(data->deptrace, "w%d",br_pending_w_reg_1);
+	else if(br_pending_w_reg == 2)
+	  gzprintf(data->deptrace, "w%dw%d", br_pending_w_reg_1, br_pending_w_reg_2);
+	else if(br_pending_w_reg == 3)
+	  gzprintf(data->deptrace, "w%dw%dw%d", br_pending_w_reg_1, br_pending_w_reg_2, br_pending_w_reg_3);
+	else if(br_pending_w_reg == 4)
+	  gzprintf(data->deptrace, "w%dw%dw%dw%d", br_pending_w_reg_1, br_pending_w_reg_2, br_pending_w_reg_3, br_pending_w_reg_4);
+	else if(br_pending_w_reg != 0)
+	  DR_ASSERT(false);
+	gzprintf(data->deptrace, "t%d", (ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc);   
+	//if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
+	gzprintf(data->deptrace,"\n");
+	  //else
+	  //gzprintf(data->deptrace,"*\n");
 	br_pending_ncb = false;
+	br_pending_r_reg = 0;
+	br_pending_r_reg_1 = 0;
+	br_pending_r_reg_2 = 0;
+	br_pending_r_reg_3 = 0;
+	br_pending_r_reg_4 = 0;
+
+	br_pending_w_reg = 0;
+	br_pending_w_reg_1 = 0;
+	br_pending_w_reg_2 = 0;
+	br_pending_w_reg_3 = 0;
+	br_pending_w_reg_4 = 0;
       }
       
       if(ins_ref->opcode == 1 || ins_ref->opcode == 2){ //read or write
@@ -392,6 +470,17 @@ ARMTracer(void *drcontext)
 	br_pending_target = ins_ref->target;
 	br_pending_pc = ins_ref->pc;
 	br_pending_pcdiff = pcdiff;
+	br_pending_r_reg = ins_ref->read_registers;
+	br_pending_r_reg_1 = ins_ref->r_reg_1;
+	br_pending_r_reg_2 = ins_ref->r_reg_2;
+	br_pending_r_reg_3 = ins_ref->r_reg_3;
+	br_pending_r_reg_4 = ins_ref->r_reg_4;
+	
+	br_pending_w_reg = ins_ref->write_registers;
+	br_pending_w_reg_1 = ins_ref->w_reg_1;
+	br_pending_w_reg_2 = ins_ref->w_reg_2;
+	br_pending_w_reg_3 = ins_ref->w_reg_3;
+	br_pending_w_reg_4 = ins_ref->w_reg_4;
       }
       else if (ins_ref->opcode == 8){ //other isntruction
 	gzprintf(data->deptrace, "%d", pcdiff);
