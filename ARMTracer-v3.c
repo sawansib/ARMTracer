@@ -146,7 +146,7 @@ app_pc endpc = 0;
 
 static uint getPCdiff(app_pc pc)
 {
-  uint diff =  (ptr_uint_t)pc -  (ptr_uint_t)curr_pc;
+  uint diff =  (ptr_uint_t)pc - (ptr_uint_t)curr_pc;
   curr_pc = pc;
   return diff;
 }
@@ -308,7 +308,7 @@ ARMTracer(void *drcontext)
 	  gzprintf(data->deptrace, "w%dw%dw%dw%d", br_pending_w_reg_1, br_pending_w_reg_2, br_pending_w_reg_3, br_pending_w_reg_4);
 	else if(br_pending_w_reg != 0)
 	  DR_ASSERT(false);
-	gzprintf(data->deptrace,"t%d", (ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc); 
+	gzprintf(data->deptrace,"t%d", (ptr_uint_t)br_pending_target - (ptr_uint_t)br_pending_pc); 
 	if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
 	  gzprintf(data->deptrace,"\n");
 	else
@@ -350,7 +350,7 @@ ARMTracer(void *drcontext)
 	  gzprintf(data->deptrace, "w%dw%dw%dw%d", br_pending_w_reg_1, br_pending_w_reg_2, br_pending_w_reg_3, br_pending_w_reg_4);
 	else if(br_pending_w_reg != 0)
 	  DR_ASSERT(false);
-	gzprintf(data->deptrace, "t%d", (ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc);   
+	gzprintf(data->deptrace, "t%d", (ptr_uint_t)br_pending_target - (ptr_uint_t)br_pending_pc);   
 	//if(((ptr_uint_t)ins_ref->pc - (ptr_uint_t)br_pending_pc) == 4)
 	gzprintf(data->deptrace,"\n");
 	  //else
