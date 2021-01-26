@@ -1,4 +1,4 @@
-/* ******************************************************************************
+65;6201;1c/* ******************************************************************************
  * Copyright (c) 2011-2018 Google, Inc.  All rights reserved.
  * Copyright (c) 2010 Massachusetts Institute of Technology  All rights reserved.
  * ******************************************************************************/
@@ -1653,7 +1653,7 @@ event_thread_exit(void *drcontext)
     //log_stream_close(data->logf); /* closes fd too */
     dr_raw_mem_free(data->buf_base, MEM_BUF_SIZE);
     dr_thread_free(drcontext, data, sizeof(per_thread_t));
-    gzprintf(data->deptrace, "END "PIFX"\n", endpc);
+    gzprintf(data->deptrace, ""PIFX"\n", endpc);
     gzclose(data->deptrace);
     
 }

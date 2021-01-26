@@ -48,8 +48,19 @@ trace_file_open(client_id_t id, void *drcontext, const char *path, const char *n
 {
   gzFile fp;
   char fn[0x100];
-  snprintf(fn, sizeof(fn), "%s-%s.tar.gz", name,dr_get_application_name());
+  size_t len;
+  char *dirsep;
+  
+  snprintf(fn, sizeof(fn), "%s%s-%s.tar.gz",path, name,dr_get_application_name());
   fp = gzopen(fn, "wb");
+  if(fp != NULL){
+    char msg[MAXIMUM_PATH];
+    len = dr_snprintf(msg, BUFFER_SIZE_ELEMENTS(msg), "Trace file %s created", fn);
+    DR_ASSERT(len > 0);
+    NULL_TERMINATE_BUFFER(msg);
+    dr_log(drcontext, DR_LOG_ALL, 1, "%s", msg);
+    DISPLAY_STRING(msg);
+  }
   return fp;
 }
 
