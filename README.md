@@ -18,6 +18,7 @@ Sawan Singh (singh.sawan@um.es) CAPS Group, University of Murcia, ES.
 mkdir build
 cd build
 cmake ../ARMTracer
+make
 ```
 # How to use it?
 ```sh
