@@ -2,7 +2,6 @@
  * Copyright (c) 2011-2018 Google, Inc.  All rights reserved.
  * Copyright (c) 2010 Massachusetts Institute of Technology  All rights reserved.
  * ******************************************************************************/
-
 /*
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
@@ -46,11 +45,13 @@
  * 2 A0 3d1 B2d2t-120* L5d1 fff0 4
  * Sawan Singh (singh.sawan@um.es) CAPS Group, University of Murcia, ES.
  * ******************************************************************************/
+
 #include <inttypes.h>
 #include <string.h> 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h> /* for offsetof */
+#include <inttypes.h>
 #include "dr_api.h"
 #include "drmgr.h"
 #include "drreg.h"
@@ -60,20 +61,17 @@
 #include "FIFO.h"
 #include <zlib.h>
 #include "reg2reg.h"
-//#include "droption.h"
 
-//static droption_t<string> DROutputTraceFile
-//(DROPTION_SCOPE_CLIENT, "t", "trace", "output",
-// "Location to save the trace.");
-
-//static droption_t<string> DROutputLogFile
-//(DROPTION_SCOPE_CLIENT, "l", "trace", "output",
-// "Location to save the log.");
-
+static dr_emit_flags_t
+event_bb_analysis(void *drcontext, void *tag, instrlist_t *bb, bool for_trace,
+		  bool translating, void **user_data);
+static dr_emit_flags_t
+event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst,
+		      bool for_trace, bool translating, void *user_data);
 
 typedef struct _ins_ref_t {
   app_pc pc;
-  int opcode; //1. Read 2. Write 3. Branch 4. FP_add/sub 5. FP_mul 6. FP_div 7. FP_sqrt 8. Other 9. Marker Begin 10. Marker End 11. Marker_value
+  int opcode; //1. Read 2. Write 3. CBranch 4. FP_add/sub 5. FP_mul 6. FP_div 7. FP_sqrt 8. Other 9. Marker Begin 10. Marker End 11. Marker_value 12. NCBranch
   int opcode_br;
   int opcode_mem;
   int marker_value;
@@ -99,6 +97,7 @@ typedef struct _ins_ref_t {
   int r_reg_3;
   int r_reg_4;
   int is_cb;
+  int ins_num;
 } ins_ref_t;
 
 enum {
@@ -112,8 +111,20 @@ enum {
 #define MAX_NUM_INS_REFS 8192
 #define MEM_BUF_SIZE (sizeof(ins_ref_t) * MAX_NUM_INS_REFS)
 #define MINSERT instrlist_meta_preinsert
-const char *log_location = "/root/mibench_trace/";
-const char *trace_location = "/root/mibench_trace/";
+
+const char *log_location = "/root/polybench_traces/"; //IF the directory does not exit it will give a seg fault
+const char *trace_location = "/root/polybench_traces/";
+
+enum {
+  SIZE_TEST = 1000000, //1M 
+  SIZE_SMALL = 10000000, // 10M 
+  SIZE_MEDIUM = 100000000, // 100M 
+  SIZE_LARGE = 500000000, // 500M 
+  SIZE_REF = 1000000000, // 1B
+};
+  
+bool instr_control = true; //set false for tracing all isntructions; true to start after 10M stop after 100M
+bool print_once = false;
 
 typedef struct {
   byte *seg_base;
@@ -124,6 +135,7 @@ typedef struct {
   uint64 num_refs;
 } per_thread_t;
 
+bool deptrace_active = false;
 char marker_value[] = "";
 bool marker = false;
 static client_id_t client_id;
@@ -136,7 +148,7 @@ static int stat_marked1;
 static int stat_marked2;
 static int stat_markedp2;
 static uint64 stat_incorrect = 0;
-
+static uint64 ins_num = 0;
 
 FILE *logs;
 
@@ -162,6 +174,16 @@ static uint getPCdiff(app_pc pc)
   uint diff =  (ptr_uint_t)pc - (ptr_uint_t)curr_pc;
   curr_pc = pc;
   return diff;
+}
+
+static app_pc exe_start;
+static uint64 global_count = 0;
+static void
+inscount(uint num_instrs)
+{
+  global_count += num_instrs;
+  DR_ASSERT(global_count > 0);
+  DR_ASSERT(num_instrs >= 0);
 }
 
 int array_to_num(int arr[],int n){
@@ -245,57 +267,20 @@ bool checkMarkedLoad(uint64 marker, app_pc ld_addr){
   return true;
 }
 
-bool checkMarkCorrect(app_pc addr, int distance, int expected_dist, app_pc store_pc) {
-  assert((distance >= 0 && distance < MAX_STORE_ADDR) ||
-	 distance == LOOP_NOALIAS_DIST);
-
-  struct AddressInfo addrInfo;
-
-  int c = 0;
-  for (int i = (last_store_addrs_begin + MAX_STORE_ADDR - 1) % MAX_STORE_ADDR,
-	 end = MAX_STORE_ADDR - 1;
-       c < end; i = (i + MAX_STORE_ADDR - 1) % MAX_STORE_ADDR, ++c) {
-    if (last_store_addrs[i].address == addr) {
-      store_pc = last_store_addrs[i].pc;
-      break;
-    }
-  }
-  if (distance >= 0 && distance < c)
-    load_mark_pessimistic_count += 1;
-  expected_dist = c;
-
-  assert(expected_dist < MAX_STORE_ADDR);
-  expected_alias_distances[expected_dist] += 1;
-
-  for (int i = (last_store_addrs_begin + MAX_STORE_ADDR - 1) % MAX_STORE_ADDR,
-	 end = distance < 0 ? MAX_STORE_ADDR - 1 : distance, count = 0;
-       count < end; i = (i + MAX_STORE_ADDR - 1) % MAX_STORE_ADDR, ++count) {
-    if (last_store_addrs[i].address == addr) {
-      addrInfo = last_store_addrs[i];
-      break;
-    }
-  }
-
-  if (addrInfo.icount == 0)
-    return true;
-  else if (distance >= 0)
-    return false;
-}
-
 static void
 ARMTracer(void *drcontext)
 {
     per_thread_t *data;
     ins_ref_t *ins_ref, *buf_ptr;
-    
     data = drmgr_get_tls_field(drcontext, tls_idx);
     buf_ptr = BUF_PTR(data->seg_base);
     for (ins_ref = (ins_ref_t *)data->buf_base; ins_ref < buf_ptr; ins_ref++) {
-      DR_ASSERT(ins_ref->opcode > 0 && ins_ref->opcode < 12);
+      DR_ASSERT(ins_ref->opcode >= 0 && ins_ref->opcode < 13);
       if(first_instr){
 	gzprintf(data->deptrace,""PIFX"\n",ins_ref->pc);
 	first_instr = false;
       }
+      ins_num+=ins_ref->ins_num;
       uint pcdiff = getPCdiff(ins_ref->pc);
       endpc = endpc + pcdiff;
       if(br_pending_cb){
@@ -474,11 +459,11 @@ ARMTracer(void *drcontext)
 	  gzprintf(data->deptrace," "PIFX" %d\n", (ptr_uint_t)ins_ref->addr,ins_ref->size);
 	}
       }
-      else if (ins_ref->opcode == 3){ //Branch
+      else if (ins_ref->opcode == 3 || ins_ref->opcode == 12){ //Branch
 	DR_ASSERT(!br_pending_cb || !br_pending_ncb);
-	if(ins_ref->is_cb)
+	if(ins_ref->opcode == 3)
 	  br_pending_cb = true;
-	else
+	else if(ins_ref->opcode == 12)
 	  br_pending_ncb = true;
 	br_pending_target = ins_ref->target;
 	br_pending_pc = ins_ref->pc;
@@ -648,7 +633,6 @@ ARMTracer(void *drcontext)
 	marker_index++;
 	DR_ASSERT(marker_index < (int)sizeof(final_marker_value));
       }
-      
       data->num_refs++;
     }
     BUF_PTR(data->seg_base) = data->buf_base;
@@ -830,6 +814,20 @@ insert_save_branch_type(void *drcontext, instrlist_t *ilist, instr_t *where, reg
 				    opnd_create_reg(scratch)));
 }
 
+static void
+insert_save_ins_num(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
+			    reg_id_t scratch, int ins_num)
+{
+  scratch = reg_resize_to_opsz(scratch, OPSZ_2);
+  MINSERT(ilist, where,
+	  XINST_CREATE_load_int(drcontext, opnd_create_reg(scratch),
+				OPND_CREATE_INT16(ins_num)));
+  MINSERT(ilist, where,
+	  XINST_CREATE_store_2bytes(
+				    drcontext, OPND_CREATE_MEM16(base, offsetof(ins_ref_t, ins_num)),
+				    opnd_create_reg(scratch)));
+}
+
 
 static void
 insert_save_opcode(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t base,
@@ -991,9 +989,6 @@ insert_save_other(void *drcontext, instrlist_t *ilist, instr_t *where, reg_id_t 
 				    opnd_create_reg(scratch)));
 }
 
-
-
-
 static void
 instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int marker_value, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
@@ -1007,33 +1002,12 @@ instrument_marker_end(void *drcontext, instrlist_t *ilist, instr_t *where, int m
   }
 
   insert_load_buf_ptr(drcontext, ilist, where, reg_ptr);
-  insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
-  insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
-  insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
-
-  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
-  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
-
-  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
-  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
-
-  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
-  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
-
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
-  
-
-  //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
-  //                  instr_get_opcode(where));
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     10);
-  insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
-		    1);
   insert_save_marker_value(drcontext, ilist, where, reg_ptr, reg_tmp,
-  		      marker_value);
+			   marker_value);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
-
+  
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
       drreg_unreserve_register(drcontext, ilist, where, reg_tmp) != DRREG_SUCCESS)
     DR_ASSERT(false);
@@ -1052,27 +1026,8 @@ instrument_marker_value(void *drcontext, instrlist_t *ilist, instr_t *where, int
   }
 
   insert_load_buf_ptr(drcontext, ilist, where, reg_ptr);
-  insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
-  insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
-  insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
-  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
-  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
-
-  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
-  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
-
-  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
-  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
-
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
-  
-  //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
-  //                  instr_get_opcode(where));
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     11);
-  insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
-		    1);
   insert_save_marker_value(drcontext, ilist, where, reg_ptr, reg_tmp,
                     marker_value);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
@@ -1096,27 +1051,8 @@ instrument_marker_begin(void *drcontext, instrlist_t *ilist, instr_t *where , in
   }
 
   insert_load_buf_ptr(drcontext, ilist, where, reg_ptr);
-  insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
-  insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
-  insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
-  insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
-  insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
-
-  insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
-  insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
-
-  insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
-  insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
-
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
-  
-  //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
-  //                  instr_get_opcode(where));
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     9);
-  insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
-		    1);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -1124,7 +1060,30 @@ instrument_marker_begin(void *drcontext, instrlist_t *ilist, instr_t *where , in
     DR_ASSERT(false);
 }
 
+static void
+instrument_instr_counter(void *drcontext, instrlist_t *ilist, instr_t *where, int ins_num)
+{
+  reg_id_t reg_ptr, reg_tmp;
+  if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
+                  DRREG_SUCCESS ||
+      drreg_reserve_register(drcontext, ilist, where, NULL, &reg_tmp) !=
+      DRREG_SUCCESS) {
+    DR_ASSERT(false); /* cannot recover */
+    return;
+  }
+  
+  insert_load_buf_ptr(drcontext, ilist, where, reg_ptr);
+  insert_save_ins_num(drcontext, ilist, where, reg_ptr, reg_tmp, ins_num);
+  insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
+		     0);
+  insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
+  
+  if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
+      drreg_unreserve_register(drcontext, ilist, where, reg_tmp) != DRREG_SUCCESS)
+    DR_ASSERT(false);
+}
 
+  
 static void
 instrument_instr(void *drcontext, instrlist_t *ilist, instr_t *where, int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
@@ -1139,26 +1098,20 @@ instrument_instr(void *drcontext, instrlist_t *ilist, instr_t *where, int write_
 
     insert_load_buf_ptr(drcontext, ilist, where, reg_ptr);
     insert_save_pc(drcontext, ilist, where, reg_ptr, reg_tmp, instr_get_app_pc(where));
-    //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
-    //                  instr_get_opcode(where));
     insert_save_read_registers(drcontext, ilist, where, reg_ptr, reg_tmp, read_registers);
     insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
     insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
     insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
-
     insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
     insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
-
     insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
     insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
-
-    insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-    insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
-    
+    //insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+    //insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
     insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		       8);
-    insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
-		       1);
+    //insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
+    //		       1);
     insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
     if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -1186,20 +1139,18 @@ instrument_fp_addsub(void *drcontext, instrlist_t *ilist, instr_t *where, int wr
   insert_save_write_registers(drcontext, ilist, where, reg_ptr, reg_tmp, write_registers);
   insert_save_read_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[0]);
   insert_save_write_registers1(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[0]);
-
   insert_save_read_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[1]);
   insert_save_write_registers2(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[1]);
-
   insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
   insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
 
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
+  //insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  //insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     4);
-  insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
-		    2); //fadd fsub
+  //insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
+  //		    2); //fadd fsub
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
   
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -1233,13 +1184,13 @@ instrument_fp_mul(void *drcontext, instrlist_t *ilist, instr_t *where, int write
   insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
   insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
 
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
+  //insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  //insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     5);
-  insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
-		    3); //fmul
+  //insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
+  //		    3); //fmul
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -1273,13 +1224,13 @@ instrument_fp_div(void *drcontext, instrlist_t *ilist, instr_t *where, int write
   insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
   insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
 
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
+  //insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  //insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     6);
-  insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
-		    4); //fdiv
+  //insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
+  //		    4); //fdiv
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -1314,13 +1265,13 @@ instrument_fp_sqrt(void *drcontext, instrlist_t *ilist, instr_t *where, int writ
   insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
   insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
 
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
+  //insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  //insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
   insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     7);
-  insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
-		    5); //fsqrt
+  //insert_save_other(drcontext, ilist, where, reg_ptr, reg_tmp,
+  //		    5); //fsqrt
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -1369,14 +1320,12 @@ instrument_mem(void *drcontext, instrlist_t *ilist, instr_t *where, opnd_t ref,
   insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
   insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
 
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
+  //insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  //insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
   
-  insert_save_operation_type(drcontext, ilist, where, reg_ptr, reg_tmp, true);
-  //insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
-  //		     instr_get_opcode(where));
-  insert_save_mem(drcontext, ilist, where, reg_ptr, reg_tmp,
-		     1);
+  //insert_save_operation_type(drcontext, ilist, where, reg_ptr, reg_tmp, true);
+  //insert_save_mem(drcontext, ilist, where, reg_ptr, reg_tmp,
+  //		  1);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
   if (drreg_unreserve_register(drcontext, ilist, where, reg_ptr) != DRREG_SUCCESS ||
@@ -1385,7 +1334,7 @@ instrument_mem(void *drcontext, instrlist_t *ilist, instr_t *where, opnd_t ref,
 }
 
 static void
-instrument_branch(void *drcontext, instrlist_t *ilist, instr_t *where, int is_cb,  int write_registers, int read_registers, int w_arr[3], int r_arr[3])
+instrument_branch(void *drcontext, instrlist_t *ilist, instr_t *where, bool is_cb,  int write_registers, int read_registers, int w_arr[3], int r_arr[3])
 {
   reg_id_t reg_ptr, reg_tmp;
   if (drreg_reserve_register(drcontext, ilist, where, NULL, &reg_ptr) !=
@@ -1412,13 +1361,17 @@ instrument_branch(void *drcontext, instrlist_t *ilist, instr_t *where, int is_cb
   insert_save_read_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[2]);
   insert_save_write_registers3(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[2]);
 
-  insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
-  insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
-  
-  insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
+  //insert_save_read_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, r_arr[3]);
+  //insert_save_write_registers4(drcontext, ilist, where, reg_ptr, reg_tmp, w_arr[3]);
+
+  if (is_cb)
+    insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
 		     3);
-  insert_save_branch_type(drcontext, ilist, where, reg_ptr, reg_tmp, is_cb);
-  insert_save_branch(drcontext, ilist, where, reg_ptr, reg_tmp, 1);
+  else
+    insert_save_opcode(drcontext, ilist, where, reg_ptr, reg_tmp,
+		       12);
+  //insert_save_branch_type(drcontext, ilist, where, reg_ptr, reg_tmp, is_cb);
+  //insert_save_branch(drcontext, ilist, where, reg_ptr, reg_tmp, 1);
   insert_save_branch_target(drcontext, ilist, where, reg_ptr, reg_tmp, target_pc);
   insert_update_buf_ptr(drcontext, ilist, where, reg_ptr, sizeof(ins_ref_t));
 
@@ -1428,15 +1381,68 @@ instrument_branch(void *drcontext, instrlist_t *ilist, instr_t *where, int is_cb
 }
 
 static dr_emit_flags_t
+event_bb_analysis(void *drcontext, void *tag, instrlist_t *bb, bool for_trace,
+		  bool translating, void **user_data)
+{
+  instr_t *instr;
+  uint num_instrs;
+  
+  bool is_emulation = false;
+  for (instr = instrlist_first(bb), num_instrs = 0; instr != NULL;
+       instr = instr_get_next(instr)) {
+    if (drmgr_is_emulation_start(instr)) {
+      num_instrs++;
+      is_emulation = true;
+      continue;
+    }
+    if (drmgr_is_emulation_end(instr)) {
+      is_emulation = false;
+      continue;
+    }
+    if (is_emulation)
+      continue;
+    if (!instr_is_app(instr))
+      continue;
+    num_instrs++;
+  }
+  *user_data = (void *)(ptr_uint_t)num_instrs;
+    return DR_EMIT_DEFAULT;
+}
+
+static dr_emit_flags_t
 event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *instr,
                       bool for_trace, bool translating, void *user_data)
 {
+  uint num_instrs;
   int i;
   drmgr_disable_auto_predication(drcontext, bb);
-  
+
   if (!instr_is_app(instr))
     return DR_EMIT_DEFAULT;
 
+  if (ins_num >= SIZE_SMALL) {
+    deptrace_active = true;
+    if (!print_once){
+      printf("Starting trace at %d \n",ins_num);
+      print_once = true;
+    }
+  }
+  if (ins_num >= SIZE_MEDIUM){
+    DR_ASSERT(deptrace_active == true);
+    deptrace_active = false;
+    if (print_once){
+      printf("Starting trace at %d \n",ins_num);
+      print_once = false;
+    }
+  }
+  
+  //if (!instr_control)
+  // deptrace_active = true;
+
+  //num_instrs = (uint)(ptr_uint_t)user_data;
+  //dr_insert_clean_call(drcontext, bb, instrlist_first_app(bb), (void *)inscount,
+  //		       false /* save fpstate */, 1, OPND_CREATE_INT32(num_instrs));
+ 
   int w_arr[3] = {0}; //MAX 4
   int r_arr[4] = {0}; //MAX 4
   
@@ -1499,14 +1505,16 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
     }
   }
 
-  if(instr_is_cti(instr)){
+  instrument_instr_counter(drcontext, bb, instr,1);
+
+  if(instr_is_cti(instr) && deptrace_active){
     if(instr_is_cbr(instr)){ //conditional branches
-      instrument_branch(drcontext, bb, instr, 1, w_reg, r_reg, w_arr, r_arr);
+      instrument_branch(drcontext, bb, instr, true, w_reg, r_reg, w_arr, r_arr);
     }
     else //all other branches 
-      instrument_branch(drcontext, bb, instr, 0, w_reg, r_reg, w_arr, r_arr);
+      instrument_branch(drcontext, bb, instr, false, w_reg, r_reg, w_arr, r_arr);
   }
-  else if(instr_reads_memory(instr) || instr_writes_memory(instr)){
+  else if((instr_reads_memory(instr) || instr_writes_memory(instr)) && deptrace_active){
     //FIXME::
     //instrument_instr(drcontext, bb, instr); //to instrument mem operation other then load store
     for (i = 0; i < instr_num_srcs(instr); i++) {
@@ -1521,21 +1529,25 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
   }
   else if(!strcmp(decode_opcode_name(instr_get_opcode(instr)), "fadd") || !strcmp(decode_opcode_name(instr_get_opcode(instr)),"fsub"))
     { //fadd fsub
-      instrument_fp_addsub(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
+      if (deptrace_active)
+	instrument_fp_addsub(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
     }
   else if(!strcmp(decode_opcode_name(instr_get_opcode(instr)), "fmul")) //fmul
     {
-      instrument_fp_mul(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
+      if (deptrace_active)
+	instrument_fp_mul(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
     }
   else if(!strcmp(decode_opcode_name(instr_get_opcode(instr)), "fdiv")) //fdiv
     {
-      instrument_fp_div(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
+      if (deptrace_active)
+	instrument_fp_div(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
     }
   else if(!strcmp(decode_opcode_name(instr_get_opcode(instr)), "fsqrt")) //sqrt 
     {
-      instrument_fp_sqrt(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
+      if (deptrace_active)
+	instrument_fp_sqrt(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
     }
-  else if (!strcmp(decode_opcode_name(instr_get_opcode(instr)), "orr"))
+  else if (!strcmp(decode_opcode_name(instr_get_opcode(instr)), "orr") && deptrace_active)
     {
       if(instr_num_srcs(instr) == 4){
 	opnd_t src_opnd = instr_get_src(instr, 0); //first operand
@@ -1581,8 +1593,11 @@ event_app_instruction(void *drcontext, void *tag, instrlist_t *bb, instr_t *inst
 	}
       }
     }
-  else
+  else if (deptrace_active){
     instrument_instr(drcontext, bb, instr, w_reg, r_reg, w_arr, r_arr);
+  }
+  //else
+  // DR_ASSERT(false);
   /* insert code once per bb to call clean_call for processing the buffer */
   if (drmgr_is_first_instr(drcontext, instr)
       /* XXX i#1698: there are constraints for code between ldrex/strex pairs,
@@ -1671,6 +1686,8 @@ event_exit(void)
         !drmgr_unregister_bb_insertion_event(event_app_instruction) ||
         drreg_exit() != DRREG_SUCCESS)
         DR_ASSERT(false);
+    global_count = ins_num;
+    float load_exe = (((float)stat_load/global_count)*100);
     float lmarked = (((float)stat_marked/stat_load)*100);
     float lmarked0 = (((float)stat_marked0/stat_marked)*100);
     float lmarked1 = (((float)stat_marked1/stat_marked)*100);
@@ -1680,15 +1697,18 @@ event_exit(void)
     
     //printSB(90,100);
     //printLB(0,10);
-    
+    DR_ASSERT(global_count > 0);
     fprintf(logs,
-	    "Loads Executed: %d\n" 
+	    "Instructions Executed: %" PRIu64 "\n"
+	    "Loads Executed: %d (%.4f%)\n" 
 	    "Loads Marked: %d (%.4f%)\n"
 	    "Marked at 0: %d (%.4f%)\n"
 	    "Marked at 1: %d (%.4f%)\n"
 	    "Marked at 2: %d (%.4f%)\n"
 	    "Marked at 2+: %d (%.4f%)\n"
 	    "Marked incorrect: %d (%.4f%)\n",
+	    global_count,
+	    load_exe,
 	    stat_load,
 	    stat_marked,lmarked,
 	    stat_marked0,lmarked0,
@@ -1711,21 +1731,11 @@ dr_client_main(client_id_t id, int argc, const char *argv[])
     if (!drmgr_init() || drreg_init(&ops) != DRREG_SUCCESS)
         DR_ASSERT(false);
 
-    //  if(argc != 2){
-    // printf("Please enter both the location for trace and log file . . .\n");
-    //DR_ASSERT(false);
-    //}
-
-    //log_location = argv[0];
-    //trace_location = argv[1];
-    //printf("Trace at %s and log file at %s",trace_location,log_location);
-    
     /* register events */
     dr_register_exit_event(event_exit);
     if (!drmgr_register_thread_init_event(event_thread_init) ||
         !drmgr_register_thread_exit_event(event_thread_exit) ||
-        !drmgr_register_bb_instrumentation_event(NULL /*analysis_func*/,
-                                                 event_app_instruction, NULL))
+        !drmgr_register_bb_instrumentation_event(event_bb_analysis,event_app_instruction, NULL))
         DR_ASSERT(false);
 
     client_id = id;
