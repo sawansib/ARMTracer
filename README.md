@@ -24,3 +24,4 @@ make
 ```sh
 drrun -c /path/to/build/bin/ARMTracer-v3.so -- binary
 ```
+ARMTracer-v3.c is the latest version, kindly use it.
